@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import legacy from "@vitejs/plugin-legacy";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     legacy({
@@ -10,5 +10,14 @@ export default defineConfig({
       modernPolyfills: true,
     }),
   ],
-  base: "/focusflow/",
-});
+  optimizeDeps: {
+    // Keep Vite from crawling generated Capacitor HTML entrypoints under ios/android.
+    entries: ["index.html"],
+  },
+  server: {
+    watch: {
+      ignored: ["**/ios/**", "**/android/**", "**/dist/**"],
+    },
+  },
+  base: mode === "mobile" ? "./" : "/focusflow/",
+}));
