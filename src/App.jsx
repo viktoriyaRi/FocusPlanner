@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { motion } from "framer-motion";
 import { Capacitor } from "@capacitor/core";
 import { LocalNotifications } from "@capacitor/local-notifications";
@@ -277,6 +278,7 @@ const getPageThemeKey = () =>
   localStorage.getItem(PAGE_THEME_KEY) || "midnight";
 const getPageThemeConfig = () =>
   PAGE_THEMES[getPageThemeKey()] || PAGE_THEMES.midnight;
+const uiTheme = getPageThemeConfig;
 (() => {
   const saved = localStorage.getItem(THEME_KEY);
   if (saved) {
@@ -300,6 +302,48 @@ const load = (k, d) => {
   }
 };
 const save = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+const loadActivePomodoro = () => load(ACTIVE_POMO_KEY, null);
+const saveActivePomodoro = (session) => save(ACTIVE_POMO_KEY, session);
+const clearActivePomodoro = () => localStorage.removeItem(ACTIVE_POMO_KEY);
+const POMODORO_ACTION_BUTTON =
+  "bg-gradient-to-r from-violet-600 to-indigo-600 text-white hover:from-violet-500 hover:to-indigo-500";
+async function fileToAvatarDataUrl(file, size = 256) {
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("read_failed"));
+    reader.readAsDataURL(file);
+  });
+
+  const image = await loadImageElement(dataUrl);
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("canvas_failed");
+
+  // Crop uploads to a square so the profile image stays consistent everywhere.
+  const scale = Math.max(size / image.width, size / image.height);
+  const drawWidth = image.width * scale;
+  const drawHeight = image.height * scale;
+  ctx.drawImage(
+    image,
+    (size - drawWidth) / 2,
+    (size - drawHeight) / 2,
+    drawWidth,
+    drawHeight,
+  );
+  return canvas.toDataURL("image/jpeg", 0.9);
+}
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("image_load_failed"));
+    image.src = src;
+  });
+}
 const uid = () => Math.random().toString(36).slice(2);
 const isNativeApp = () => Capacitor.isNativePlatform();
 
@@ -523,122 +567,15 @@ function showPomodoroCompleteToast({ task, minutes, sessions }) {
             >
               Take a short break.
             </p>
-
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-              <span
-                className={[
-                  "rounded-full px-2.5 py-1",
-                  NOTIFICATION_THEME.taskChip,
-                ].join(" ")}
-              >
-                {taskLabel}
-              </span>
-              <span
-                className={[
-                  "rounded-full px-2.5 py-1",
-                  NOTIFICATION_THEME.minutesChip,
-                ].join(" ")}
-              >
-                {minutes} min
-              </span>
-              <span
-                className={[
-                  "rounded-full px-2.5 py-1",
-                  NOTIFICATION_THEME.sessionChip,
-                ].join(" ")}
-              >
-                Session {sessions}
-              </span>
-            </div>
           </div>
-
-          <button
-            onClick={() => toast.dismiss(t.id)}
-            className={[
-              "rounded-xl p-2 transition",
-              NOTIFICATION_THEME.close,
-            ].join(" ")}
-            aria-label="Dismiss notification"
-          >
-            ×
-          </button>
         </div>
       </div>
     ),
-    { duration: 6000, position: "top-right" },
+    {
+      duration: 4000,
+      position: "top-right",
+    },
   );
-}
-
-function saveActivePomodoro(session) {
-  localStorage.setItem(ACTIVE_POMO_KEY, JSON.stringify(session));
-}
-
-function loadActivePomodoro() {
-  return load(ACTIVE_POMO_KEY, null);
-}
-
-function clearActivePomodoro() {
-  localStorage.removeItem(ACTIVE_POMO_KEY);
-}
-
-function uiTheme() {
-  return getPageThemeConfig();
-}
-
-function getSavedAvatar() {
-  return localStorage.getItem(AVATAR_KEY) || PRESET_AVATARS[0].src;
-}
-
-function getSavedProfileName() {
-  return localStorage.getItem(PROFILE_NAME_KEY) || "";
-}
-
-async function fileToAvatarDataUrl(file, size = 256) {
-  const dataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("read_failed"));
-    reader.readAsDataURL(file);
-  });
-
-  const img = await new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("image_failed"));
-    image.src = dataUrl;
-  });
-
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("canvas_failed");
-
-  ctx.clearRect(0, 0, size, size);
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
-  ctx.closePath();
-  ctx.clip();
-
-  const scale = Math.max(size / img.width, size / img.height);
-  const drawW = img.width * scale;
-  const drawH = img.height * scale;
-  const dx = (size - drawW) / 2;
-  const dy = (size - drawH) / 2;
-  ctx.drawImage(img, dx, dy, drawW, drawH);
-  ctx.restore();
-
-  return canvas.toDataURL("image/jpeg", 0.9);
-}
-
-function loadImageElement(src) {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("image_load_failed"));
-    image.src = src;
-  });
 }
 
 function roundRectPath(ctx, x, y, w, h, r) {
@@ -1100,6 +1037,23 @@ initIfEmpty();
 cleanupLegacySeedData();
 
 /* ===================== App ===================== */
+const DEFAULT_AVATAR_URL = PRESET_AVATARS[0].src;
+
+const loadStoredText = (key, fallback = "") => {
+  const stored = localStorage.getItem(key);
+  if (!stored) return fallback;
+
+  // Read both the current JSON format and values saved by earlier versions.
+  try {
+    const value = JSON.parse(stored);
+    return typeof value === "string" ? value : fallback;
+  } catch {
+    return stored;
+  }
+};
+
+const getSavedAvatar = () => loadStoredText(AVATAR_KEY, DEFAULT_AVATAR_URL);
+const getSavedProfileName = () => loadStoredText(PROFILE_NAME_KEY, "");
 /** @typedef {{ id: string, title: string, done: boolean, createdAt: number,
       priority?: 'low'|'med'|'high', due?: string, time?: string, remindMins?: number,
       estimateMins?: number, startedAt?: number|null }} Todo */
@@ -1119,6 +1073,7 @@ export default function FocusFlow() {
   const [tourStepIndex, setTourStepIndex] = useState(-1);
   const [installPrompt, setInstallPrompt] = useState(null);
   const [isInstalled, setIsInstalled] = useState(false);
+  const [currentPage, setCurrentPage] = useState("dashboard");
   const tasksRef = useRef(null);
   const pomoRef = useRef(null);
   const habitsRef = useRef(null);
@@ -1245,6 +1200,36 @@ export default function FocusFlow() {
   );
   useEffect(() => save("ff.habits", habits), [habits]);
 
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationTick, setNotificationTick] = useState(Date.now());
+  useEffect(() => {
+    const intervalId = window.setInterval(
+      () => setNotificationTick(Date.now()),
+      30 * 1000,
+    );
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const todayReminders = useMemo(() => {
+    const now = notificationTick;
+    const today = todayKey();
+
+    return (todos ?? [])
+      .filter((todo) => !todo.done && todo.due === today && todo.time)
+      .map((todo) => {
+        const dueAt = new Date(`${todo.due}T${todo.time}:00`).getTime();
+        const reminderMinutes = Number(todo.remindMins) || 0;
+        return {
+          ...todo,
+          dueAt,
+          reminderAt: dueAt - reminderMinutes * 60 * 1000,
+          isApproaching: now >= dueAt - reminderMinutes * 60 * 1000,
+        };
+      })
+      .filter((todo) => Number.isFinite(todo.dueAt) && todo.dueAt >= now)
+      .sort((a, b) => a.dueAt - b.dueAt);
+  }, [notificationTick, todos]);
+
   // Pomodoro
   const [pomo, setPomo] = useState(
     load("ff.pomo", { minutes: 25, sessions: 0, history: [] }),
@@ -1253,6 +1238,7 @@ export default function FocusFlow() {
 
   // Start from habit
   const [startSignal, setStartSignal] = useState(0);
+  const [stopSignal, setStopSignal] = useState(0);
   const [currentTask, setCurrentTask] = useState("");
   const [activeHabitId, setActiveHabitId] = useState(null);
   const [activeTodoId, setActiveTodoId] = useState(null);
@@ -1293,6 +1279,23 @@ export default function FocusFlow() {
     setCurrentTask("");
     setActiveHabitId(null);
     setActiveTodoId(null);
+  }, []);
+
+  const stopActiveTask = useCallback(() => {
+    clearActivePomodoro();
+    cancelNativePomodoroNotification().catch((error) => {
+      console.warn("native pomodoro notification cancel failed", error);
+    });
+    setStopSignal((signal) => signal + 1);
+    clearActiveSessionUi();
+  }, [clearActiveSessionUi]);
+
+  useEffect(() => {
+    const saved = loadActivePomodoro();
+    if (!saved?.endAt || saved.endAt <= Date.now()) return;
+    setCurrentTask(saved.taskLabel || "");
+    setActiveHabitId(saved.habitId || null);
+    setActiveTodoId(saved.todoId || null);
   }, []);
 
   const tourSteps = useMemo(
@@ -1339,11 +1342,6 @@ export default function FocusFlow() {
   }, []);
 
   const startTour = useCallback(() => {
-    setShowWelcome(false);
-    setTourStepIndex(0);
-  }, []);
-
-  const reopenGuide = useCallback(() => {
     setShowWelcome(false);
     setTourStepIndex(0);
   }, []);
@@ -1525,7 +1523,7 @@ export default function FocusFlow() {
   return (
     <div
       className="
-      relative isolate min-h-dvh w-full overflow-x-hidden
+      relative isolate flex min-h-dvh w-full overflow-x-hidden
       transition-colors duration-300
       text-slate-900 dark:text-slate-100
     "
@@ -1546,125 +1544,360 @@ export default function FocusFlow() {
         />
       </div>
 
-      {/* Header */}
-      <header className="relative z-30 w-full max-w-7xl mx-auto px-4 py-6">
-        <div className="flex items-start sm:items-center justify-between gap-4 flex-wrap">
-          <div className="flex items-start gap-4">
-            <AvatarPicker
-              avatarSrc={avatarSrc}
-              profileName={profileName}
-              onChangeAvatar={setAvatarSrc}
-              onChangeName={setProfileName}
-            />
-
-            <div>
-              <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
-                FocusFlow
-              </h1>
-              <p className="text-sm leading-snug text-slate-500 dark:text-slate-400 mt-1 max-w-xl">
-                Tiny productivity app that combines a Pomodoro timer,
-                mini-kanban tasks, and habits — with browser notifications and a
-                daily goal.
-              </p>
-            </div>
-          </div>
-
-          {/* buttons wrap nicely on mobile */}
-          <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap overflow-x-visible">
-            <label
-              className={`flex items-center gap-2 rounded-xl border px-3 py-1.5 text-sm shadow-sm backdrop-blur ${pageThemeConfig.selectShell}`}
-            >
-              <span className="text-slate-500 dark:text-slate-300">Color</span>
-              <select
-                value={pageTheme}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  setPageTheme(next);
-                  localStorage.setItem(PAGE_THEME_KEY, next);
-                }}
-                className="bg-transparent outline-none"
-                style={{
-                  color: darkMode ? "#f8fafc" : undefined,
-                }}
-                title="Page color"
-              >
-                {Object.entries(PAGE_THEMES).map(([key, cfg]) => (
-                  <option key={key} value={key} className="text-slate-900">
-                    {cfg.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
+      {/* Main Content Area */}
+      <div className="min-w-0 flex-1 flex flex-col overflow-hidden">
+        {/* Top Header */}
+        <header className="relative z-30 border-b border-slate-200/80 bg-white/75 px-4 backdrop-blur dark:border-slate-700/80 dark:bg-slate-950/75 sm:px-7">
+          <div className="flex h-16 items-center gap-5">
             <button
               type="button"
-              onClick={() => {
-                resetApp();
-              }}
-              className={`px-3 py-1.5 rounded-xl text-sm shadow-sm hover:shadow md:px-4 ${pageThemeConfig.primaryButton}`}
+              onClick={() => setCurrentPage("dashboard")}
+              className="flex shrink-0 items-center gap-2.5 text-left"
+              aria-label="Go to dashboard"
             >
-              Reset
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 via-indigo-500 to-blue-500 text-xl text-white shadow-md shadow-violet-500/25">
+                ✦
+              </span>
+              <span className="text-xl font-bold tracking-tight sm:text-2xl">
+                Focus<span className="text-violet-600 dark:text-violet-300">Flow</span>
+              </span>
             </button>
 
-            <button
-              onClick={() => {
-                const r = document.documentElement;
-                const next = r.classList.toggle("dark");
-                localStorage.setItem(THEME_KEY, next ? "dark" : "light");
-                setThemeTick((t) => t + 1);
-                primeAudio();
-              }}
-              className={`px-3 py-1.5 rounded-xl ${pageThemeConfig.primaryButton}`}
-            >
-              Toggle theme
-            </button>
+            <nav className="hidden h-full items-stretch gap-1 md:flex" aria-label="Main navigation">
+              {[
+                ["dashboard", "Dashboard"],
+                ["tasks", "Tasks"],
+                ["pomodoro", "Focus"],
+                ["habits", "Habits"],
+                ["statistics", "Statistics"],
+              ].map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setCurrentPage(id)}
+                  className={`relative px-4 text-sm font-medium transition-colors ${
+                    currentPage === id
+                      ? "text-violet-600 dark:text-violet-300"
+                      : "text-slate-600 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white"
+                  }`}
+                >
+                  {label}
+                  {currentPage === id && (
+                    <span className="absolute inset-x-3 bottom-2 h-0.5 rounded-full bg-violet-500" />
+                  )}
+                </button>
+              ))}
+            </nav>
 
-            <button
-              onClick={reopenGuide}
-              className={`px-3 py-1.5 rounded-xl border text-sm shadow-sm hover:shadow ${pageThemeConfig.secondaryButton}`}
-            >
-              Guide
-            </button>
+            <div className="ml-auto flex items-center gap-2">
+              <div className="relative hidden sm:block">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await ensurePermission();
+                    setNotificationsOpen((open) => !open);
+                  }}
+                  className={`relative inline-flex h-11 w-11 items-center justify-center rounded-2xl border transition hover:-translate-y-0.5 hover:shadow-md ${pageThemeConfig.secondaryButton}`}
+                  title="Today's reminders"
+                  aria-label="Today's reminders"
+                  aria-expanded={notificationsOpen}
+                >
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
+                    <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+                    <path d="M10 21h4" />
+                  </svg>
+                  {todayReminders.length > 0 && (
+                    <span className="absolute right-1.5 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-violet-600 px-1 text-[10px] font-bold text-white">
+                      {todayReminders.length}
+                    </span>
+                  )}
+                </button>
 
-            {!isNativeApp() && (
+                {notificationsOpen && (
+                  <div className="absolute right-0 top-[calc(100%+10px)] z-[70] w-80 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-semibold">Today&apos;s reminders</p>
+                      <button
+                        type="button"
+                        onClick={() => setNotificationsOpen(false)}
+                        className="text-sm text-slate-400 transition hover:text-slate-700 dark:hover:text-slate-200"
+                        aria-label="Close reminders"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    {todayReminders.length === 0 ? (
+                      <p className="mt-4 rounded-xl bg-slate-50 px-3 py-4 text-center text-sm text-slate-500 dark:bg-slate-800/70 dark:text-slate-400">
+                        No tasks with a reminder today.
+                      </p>
+                    ) : (
+                      <ul className="mt-3 space-y-2">
+                        {todayReminders.map((todo) => (
+                          <li
+                            key={todo.id}
+                            className="rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/70"
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="truncate text-sm font-medium">
+                                {todo.title}
+                              </span>
+                              <span className="shrink-0 text-xs text-slate-500 dark:text-slate-400">
+                                {todo.time}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                              {todo.isApproaching
+                                ? "Reminder active"
+                                : `Reminder at ${new Date(todo.reminderAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
               <button
-                onClick={async () => {
+                onClick={() => {
+                  const r = document.documentElement;
+                  const next = r.classList.toggle("dark");
+                  localStorage.setItem(THEME_KEY, next ? "dark" : "light");
+                  setThemeTick((t) => t + 1);
                   primeAudio();
-                  const okSecure = secureOk();
-                  if (!okSecure) {
-                    toast.error("Notifications need HTTPS or localhost");
-                    return;
-                  }
-                  const ok = await ensurePermission();
-                  if (ok) {
-                    notify("✅ Notifications enabled", {
-                      body: "I'll alert you here.",
-                      silent: false,
-                    });
-                    const ctx = ensureAudioContext();
-                    if (ctx) playBeep(ctx, 0.9);
-                    toast.success("Notifications enabled");
-                  } else {
-                    toast.error("Allow notifications in the browser settings");
-                  }
                 }}
-                className={`px-3 py-1.5 rounded-xl border text-sm shadow-sm hover:shadow ${pageThemeConfig.secondaryButton}`}
+                className={`inline-flex h-11 w-11 items-center justify-center rounded-2xl border transition hover:-translate-y-0.5 hover:shadow-md ${pageThemeConfig.secondaryButton}`}
+                title="Toggle theme"
+                aria-label="Toggle theme"
               >
-                Enable notifications
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
+                  <circle cx="12" cy="12" r="3.5" />
+                  <path d="M12 2v2.5M12 19.5V22M4.93 4.93 6.7 6.7m10.6 10.6 1.77 1.77M2 12h2.5M19.5 12H22M4.93 19.07 6.7 17.3M17.3 6.7l1.77-1.77" />
+                </svg>
               </button>
-            )}
-
-            {!isInstalled && installPrompt && (
-              <button
-                onClick={installApp}
-                className={`px-3 py-1.5 rounded-xl text-sm shadow-sm hover:shadow ${pageThemeConfig.primaryButton}`}
-              >
-                Install app
-              </button>
-            )}
+              <AvatarPicker
+                compact
+                avatarSrc={avatarSrc}
+                profileName={profileName}
+                onChangeAvatar={setAvatarSrc}
+                onChangeName={setProfileName}
+              />
+            </div>
           </div>
+        </header>
+
+        {/* Content Area */}
+        <div className="min-w-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+          {currentPage === "dashboard" && (
+          <div className="w-full">
+              <div className="mb-6">
+                <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
+                  Welcome to FocusFlow! 👋
+                </h1>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  Let's plan your day and make it productive.
+                </p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-12">
+              {/* Tasks Section */}
+              <SectionCard
+                ref={tasksRef}
+                highlight={tourActive && currentTourStep?.key === "tasks"}
+                className="self-start xl:col-span-6"
+              >
+                <h2 className="text-lg font-semibold mb-4">
+                  Tasks (Mini-Kanban)
+                </h2>
+                <Board
+                  todos={todos}
+                  setTodos={setTodos}
+                  onStartTask={startTask}
+                  onStopTask={stopActiveTask}
+                  activeTodoId={activeTodoId}
+                />
+              </SectionCard>
+
+              {/* Pomodoro Section */}
+              <SectionCard
+                ref={pomoRef}
+                highlight={tourActive && currentTourStep?.key === "pomodoro"}
+                className="xl:col-span-6 bg-[radial-gradient(ellipse_at_50%_62%,rgba(196,181,253,0.46)_0%,rgba(237,233,254,0.34)_48%,transparent_84%)] dark:bg-[radial-gradient(ellipse_at_50%_62%,rgba(124,58,237,0.38)_0%,rgba(49,46,129,0.22)_55%,transparent_84%)]"
+              >
+                <Pomodoro
+                  pomo={pomo}
+                  setPomo={setPomo}
+                  externalStartSignal={startSignal}
+                  externalStopSignal={stopSignal}
+                  currentTask={currentTask}
+                  activeHabitId={activeHabitId}
+                  activeTodoId={activeTodoId}
+                  onSessionClear={clearActiveSessionUi}
+                  onHabitAutoDone={markHabitDoneById}
+                  onTodoAutoDone={markTodoDoneById}
+                />
+              </SectionCard>
+
+              {/* Habits Section */}
+              <SectionCard
+                ref={habitsRef}
+                highlight={tourActive && currentTourStep?.key === "habits"}
+                className="self-start xl:col-span-6"
+              >
+                <Habits
+                  habits={habits}
+                  setHabits={setHabits}
+                  onStartHabit={startHabit}
+                  onStopHabit={stopActiveTask}
+                  activeHabitId={activeHabitId}
+                />
+              </SectionCard>
+
+              {/* Daily Goal Section */}
+              <SectionCard
+                ref={goalRef}
+                highlight={tourActive && currentTourStep?.key === "goal"}
+                className="xl:col-span-6"
+              >
+                <DailyGoal
+                  pomo={pomo}
+                  habits={habits}
+                  avatarSrc={avatarSrc}
+                  profileName={profileName}
+                />
+              </SectionCard>
+
+              {/* Weekly summary */}
+              <div className="md:col-span-2 xl:col-span-12">
+                <SectionCard>
+                  <WeeklyChart key={themeTick} pomo={pomo} todos={todos} />
+                </SectionCard>
+              </div>
+              </div>
+            </div>
+          )}
+
+          {currentPage === "tasks" && (
+            <div>
+              <Board
+                todos={todos}
+                setTodos={setTodos}
+                onStartTask={startTask}
+                onStopTask={stopActiveTask}
+                activeTodoId={activeTodoId}
+              />
+            </div>
+          )}
+
+          {currentPage === "pomodoro" && (
+            <div className="max-w-md">
+              <Pomodoro
+                pomo={pomo}
+                setPomo={setPomo}
+                externalStartSignal={startSignal}
+                externalStopSignal={stopSignal}
+                currentTask={currentTask}
+                activeHabitId={activeHabitId}
+                activeTodoId={activeTodoId}
+                onSessionClear={clearActiveSessionUi}
+                onHabitAutoDone={markHabitDoneById}
+                onTodoAutoDone={markTodoDoneById}
+              />
+            </div>
+          )}
+
+          {currentPage === "habits" && (
+            <div>
+              <Habits
+                habits={habits}
+                setHabits={setHabits}
+                onStartHabit={startHabit}
+                onStopHabit={stopActiveTask}
+                activeHabitId={activeHabitId}
+              />
+            </div>
+          )}
+
+          {currentPage === "statistics" && (
+            <div>
+              <WeeklyChart key={themeTick} pomo={pomo} />
+            </div>
+          )}
+
+          {currentPage === "settings" && (
+            <div className="max-w-md space-y-4">
+    <div className="space-y-2">
+                <h3 className="font-semibold">App Settings</h3>
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span>Color theme</span>
+                  <select
+                    value={pageTheme}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setPageTheme(next);
+                      localStorage.setItem(PAGE_THEME_KEY, next);
+                    }}
+                    className="rounded-lg border bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-900"
+                  >
+                    {Object.entries(PAGE_THEMES).map(([key, cfg]) => (
+                      <option key={key} value={key} className="text-slate-900">
+                        {cfg.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  onClick={() => resetApp()}
+                  className={`w-full px-4 py-2 rounded-lg text-sm ${pageThemeConfig.primaryButton}`}
+                >
+                  Reset App
+                </button>
+              </div>
+              {!isNativeApp() && (
+                <div className="space-y-2">
+                  <h3 className="font-semibold">Notifications</h3>
+                  <button
+                    onClick={async () => {
+                      primeAudio();
+                      const okSecure = secureOk();
+                      if (!okSecure) {
+                        toast.error("Notifications need HTTPS or localhost");
+                        return;
+                      }
+                      const ok = await ensurePermission();
+                      if (ok) {
+                        notify("✅ Notifications enabled", {
+                          body: "I'll alert you here.",
+                          silent: false,
+                        });
+                        const ctx = ensureAudioContext();
+                        if (ctx) playBeep(ctx, 0.9);
+                        toast.success("Notifications enabled");
+                      } else {
+                        toast.error(
+                          "Allow notifications in the browser settings",
+                        );
+                      }
+                    }}
+                    className={`w-full px-4 py-2 rounded-lg border text-sm ${pageThemeConfig.secondaryButton}`}
+                  >
+                    Enable Notifications
+                  </button>
+                </div>
+              )}
+              {!isInstalled && installPrompt && (
+                <div className="space-y-2">
+                  <h3 className="font-semibold">Install</h3>
+                  <button
+                    onClick={installApp}
+                    className={`w-full px-4 py-2 rounded-lg text-sm ${pageThemeConfig.primaryButton}`}
+                  >
+                    Install App
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
-      </header>
+      </div>
 
       {/* Toaster */}
       <Toaster
@@ -1757,78 +1990,6 @@ export default function FocusFlow() {
           </div>
         </>
       )}
-
-      {/* Main grid */}
-      <main className="relative z-10 w-full max-w-7xl mx-auto px-4 pb-12 grid gap-6 md:grid-cols-2 xl:grid-cols-12">
-        {/* Tasks */}
-        <SectionCard
-          ref={tasksRef}
-          highlight={tourActive && currentTourStep?.key === "tasks"}
-          className="xl:col-span-8"
-        >
-          <h2 className="text-lg font-semibold mb-4">Tasks (Mini-Kanban)</h2>
-          <Board
-            todos={todos}
-            setTodos={setTodos}
-            onStartTask={startTask}
-            activeTodoId={activeTodoId}
-          />
-        </SectionCard>
-
-        {/* Pomodoro */}
-        <SectionCard
-          ref={pomoRef}
-          highlight={tourActive && currentTourStep?.key === "pomodoro"}
-          className="xl:col-span-4"
-        >
-          <h2 className="text-lg font-semibold mb-4">Pomodoro</h2>
-          <Pomodoro
-            pomo={pomo}
-            setPomo={setPomo}
-            externalStartSignal={startSignal}
-            currentTask={currentTask}
-            activeHabitId={activeHabitId}
-            activeTodoId={activeTodoId}
-            onSessionClear={clearActiveSessionUi}
-            onHabitAutoDone={markHabitDoneById}
-            onTodoAutoDone={markTodoDoneById}
-          />
-        </SectionCard>
-
-        {/* Habits */}
-        <SectionCard
-          ref={habitsRef}
-          highlight={tourActive && currentTourStep?.key === "habits"}
-          className="xl:col-span-4"
-        >
-          <h2 className="text-lg font-semibold mb-4">Habits & Streaks</h2>
-          <Habits
-            habits={habits}
-            setHabits={setHabits}
-            onStartHabit={startHabit}
-          />
-        </SectionCard>
-
-        {/* Daily Goal */}
-        <SectionCard
-          ref={goalRef}
-          highlight={tourActive && currentTourStep?.key === "goal"}
-          className="xl:col-span-8"
-        >
-          <DailyGoal
-            pomo={pomo}
-            habits={habits}
-            avatarSrc={avatarSrc}
-            profileName={profileName}
-          />
-        </SectionCard>
-
-        {/* Weekly chart */}
-        <SectionCard className="xl:col-span-12">
-          <h2 className="text-lg font-semibold mb-4">This Week</h2>
-          <WeeklyChart key={themeTick} pomo={pomo} />
-        </SectionCard>
-      </main>
     </div>
   );
 }
@@ -1853,10 +2014,30 @@ function Pill({ children, variant = "slate" }) {
 }
 
 /* Small clickable help tooltip */
-function HelpTip({ label = "Help", children }) {
+function HelpTip({ label = "Help", symbol = "?", children }) {
   const [open, setOpen] = useState(false);
+  const tipRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const closeOnOutsideClick = (event) => {
+      if (!tipRef.current?.contains(event.target)) setOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
   return (
-    <span className="relative inline-block">
+    <span ref={tipRef} className="relative inline-block">
       <button
         className="inline-flex items-center justify-center w-6 h-6 rounded-full border text-xs opacity-70 hover:opacity-100 transition
                    bg-white dark:bg-slate-900 dark:border-slate-700"
@@ -1866,7 +2047,7 @@ function HelpTip({ label = "Help", children }) {
         }}
         title={label}
       >
-        ?
+        {symbol}
       </button>
 
       {open && (
@@ -1886,6 +2067,7 @@ function AvatarPicker({
   profileName,
   onChangeAvatar,
   onChangeName,
+  compact = false,
 }) {
   const theme = uiTheme();
   const [open, setOpen] = useState(false);
@@ -1898,7 +2080,7 @@ function AvatarPicker({
 
   const applyAvatar = useCallback(
     (src) => {
-      localStorage.setItem(AVATAR_KEY, src);
+      save(AVATAR_KEY, src);
       onChangeAvatar(src);
       setOpen(false);
     },
@@ -1925,7 +2107,7 @@ function AvatarPicker({
   const saveName = useCallback(() => {
     const next = draftName.trim();
     if (next) {
-      localStorage.setItem(PROFILE_NAME_KEY, next);
+      save(PROFILE_NAME_KEY, next);
       onChangeName(next);
       toast.success("Name updated");
     } else {
@@ -1937,37 +2119,62 @@ function AvatarPicker({
 
   return (
     <div className={`relative shrink-0 ${open ? "z-[60]" : "z-20"}`}>
-      <div className="flex flex-col items-center">
-        <div className="relative">
-          <button
-            onClick={() => setPreviewOpen(true)}
-            className="group relative"
-            aria-label="Open avatar preview"
-            title="Open avatar preview"
-          >
-            <img
-              src={avatarSrc}
-              alt="Profile avatar"
-              className="h-20 w-20 rounded-[1.75rem] object-cover border-2 border-white/70 shadow-lg shadow-slate-900/10 transition-transform group-hover:scale-[1.03] dark:border-slate-800"
-            />
-          </button>
+      {compact ? (
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="flex items-center gap-2 rounded-2xl border border-transparent py-1 pl-1 pr-2.5 transition hover:border-violet-100 hover:bg-violet-50/70 dark:hover:border-violet-900 dark:hover:bg-violet-950/30"
+          aria-expanded={open}
+          aria-label="Open profile settings"
+        >
+          <img
+            src={avatarSrc}
+            alt={profileName || "Profile"}
+            className="h-12 w-12 rounded-2xl border-2 border-white/80 object-cover shadow-md shadow-violet-500/15 dark:border-slate-700"
+          />
+          <span className="hidden max-w-28 text-left sm:block">
+            <span className="block truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
+              {profileName || "Your profile"}
+            </span>
+            <span className="block text-xs text-slate-500 dark:text-slate-400">
+              Profile
+            </span>
+          </span>
+          <span className="text-sm text-violet-600 dark:text-violet-300">⌄</span>
+        </button>
+      ) : (
+        <div className="flex flex-col items-center">
+          <div className="relative">
+            <button
+              onClick={() => setPreviewOpen(true)}
+              className="group relative"
+              aria-label="Open avatar preview"
+              title="Open avatar preview"
+            >
+              <img
+                src={avatarSrc}
+                alt="Profile avatar"
+                className="h-20 w-20 rounded-[1.75rem] object-cover border-2 border-white/70 shadow-lg shadow-slate-900/10 transition-transform group-hover:scale-[1.03] dark:border-slate-800"
+              />
+            </button>
 
-          <button
-            onClick={() => setOpen((v) => !v)}
-            className={`absolute -bottom-1 -right-1 rounded-full px-2 py-1 text-[10px] font-medium shadow ${theme.primaryButton}`}
-            aria-label="Change avatar"
-            title="Change avatar"
-          >
-            Edit
-          </button>
+            <button
+              onClick={() => setOpen((value) => !value)}
+              className={`absolute -bottom-1 -right-1 rounded-full px-2 py-1 text-[10px] font-medium shadow ${theme.primaryButton}`}
+              aria-label="Change avatar"
+              title="Change avatar"
+            >
+              Edit
+            </button>
+          </div>
+
+          {profileName ? (
+            <p className="profile-name mt-2 max-w-[144px] truncate text-center text-[1.05rem] italic text-slate-500/95 dark:text-slate-300/90">
+              {profileName}
+            </p>
+          ) : null}
         </div>
-
-        {profileName ? (
-          <p className="profile-name mt-2 max-w-[144px] truncate text-center text-[1.05rem] italic text-slate-500/95 dark:text-slate-300/90">
-            {profileName}
-          </p>
-        ) : null}
-      </div>
+      )}
 
       {previewOpen && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm">
@@ -1990,13 +2197,13 @@ function AvatarPicker({
 
       {open && (
         <div
-          className={`absolute left-0 top-[calc(100%+12px)] z-[70] max-h-[min(78vh,640px)] w-[min(92vw,320px)] overflow-y-auto rounded-3xl border p-4 shadow-2xl backdrop-blur custom-scroll ${theme.card}`}
+          className={`absolute top-[calc(100%+12px)] z-[70] max-h-[min(78vh,640px)] w-[min(92vw,420px)] overflow-y-auto rounded-3xl border p-5 shadow-2xl backdrop-blur custom-scroll ${compact ? "right-0" : "left-0"} ${theme.card}`}
         >
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-sm font-semibold">Choose avatar</p>
+              <p className="text-lg font-semibold">My Profile</p>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                Pick a portrait avatar or upload your own photo.
+                Choose a photo and name for your shared Daily Goal card.
               </p>
             </div>
             <button
@@ -2008,67 +2215,16 @@ function AvatarPicker({
             </button>
           </div>
 
-          <div className="mt-4 border-t border-slate-200/70 pt-4 dark:border-slate-700/70">
-            <label className="block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-              Display name
-            </label>
-            <div className="mt-2 flex gap-2">
-              <input
-                type="text"
-                value={draftName}
-                onChange={(e) => setDraftName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    saveName();
-                  }
-                }}
-                placeholder="Your name"
-                maxLength={24}
-                className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white/90 px-3 py-2 text-sm text-slate-700 outline-none ring-0 transition placeholder:text-slate-400 focus:border-sky-400 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-100"
+          <div className="mt-5 flex gap-4 border-t border-slate-200/70 pt-5 dark:border-slate-700/70">
+            <label className="group relative shrink-0 cursor-pointer">
+              <img
+                src={avatarSrc}
+                alt="Current profile avatar"
+                className="h-20 w-20 rounded-3xl object-cover shadow-md"
               />
-              <button
-                type="button"
-                onClick={saveName}
-                className={`rounded-2xl border px-3 py-2 text-sm ${theme.primaryButton}`}
-              >
-                Save
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-4 grid grid-cols-3 gap-3">
-            {PRESET_AVATARS.map((avatar) => {
-              const active = avatar.src === avatarSrc;
-              return (
-                <button
-                  key={avatar.id}
-                  onClick={() => applyAvatar(avatar.src)}
-                  className={`rounded-2xl border p-2 transition ${
-                    active
-                      ? "border-sky-400 ring-2 ring-sky-300/50"
-                      : "border-transparent hover:border-slate-300 dark:hover:border-slate-600"
-                  }`}
-                  title={avatar.label}
-                >
-                  <img
-                    src={avatar.src}
-                    alt={avatar.label}
-                    className="h-16 w-16 rounded-2xl object-cover"
-                  />
-                  <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
-                    {avatar.label}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <label
-              className={`cursor-pointer rounded-2xl border px-3 py-2 text-sm ${theme.primaryButton}`}
-            >
-              Upload photo
+              <span className="absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-violet-600 text-sm text-white shadow-sm dark:border-slate-900">
+                +
+              </span>
               <input
                 type="file"
                 accept="image/*"
@@ -2076,9 +2232,84 @@ function AvatarPicker({
                 className="hidden"
               />
             </label>
+            <div className="min-w-0 flex-1">
+              <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                Your name
+              </label>
+              <div className="mt-2 flex gap-2">
+                <input
+                  type="text"
+                  value={draftName}
+                  onChange={(e) => setDraftName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      saveName();
+                    }
+                  }}
+                  placeholder="Your name"
+                  maxLength={24}
+                  className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white/90 px-3 py-2.5 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-violet-400 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-100"
+                />
+                <button
+                  type="button"
+                  onClick={saveName}
+                  className={`rounded-xl border px-3 py-2 text-sm font-medium ${theme.primaryButton}`}
+                >
+                  Save
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                This name appears on your shared achievement card.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+              Profile photo
+            </p>
+            <div className="mt-3 grid grid-cols-5 gap-3">
+            {PRESET_AVATARS.map((avatar) => {
+              const active = avatar.src === avatarSrc;
+              return (
+                <button
+                  key={avatar.id}
+                  onClick={() => applyAvatar(avatar.src)}
+                  className={`rounded-2xl border p-1.5 transition ${
+                    active
+                      ? "border-violet-400 ring-2 ring-violet-300/50"
+                      : "border-transparent hover:border-slate-300 dark:hover:border-slate-600"
+                  }`}
+                  title={avatar.label}
+                >
+                  <img
+                    src={avatar.src}
+                    alt={avatar.label}
+                    className="h-12 w-12 rounded-xl object-cover"
+                  />
+                </button>
+              );
+            })}
+            <label
+              className="flex h-[60px] w-[60px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-violet-300 text-violet-600 transition hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-950/30"
+            >
+              <span className="text-2xl leading-none">+</span>
+              <span className="mt-1 text-[10px] font-medium">Upload</span>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={onUpload}
+                className="hidden"
+              />
+            </label>
+            </div>
+          </div>
+
+          <div className="mt-5 border-t border-slate-200/70 pt-4 dark:border-slate-700/70">
             <button
               onClick={() => applyAvatar(PRESET_AVATARS[0].src)}
-              className={`rounded-2xl border px-3 py-2 text-sm ${theme.secondaryButton}`}
+              className={`rounded-xl border px-3 py-2 text-xs font-medium ${theme.secondaryButton}`}
             >
               Reset avatar
             </button>
@@ -2101,7 +2332,7 @@ const SectionCard = forwardRef(function SectionCard(
       ref={ref}
       layout
       className={
-        "relative border rounded-xl md:rounded-2xl shadow-sm p-3 sm:p-4 md:p-6 backdrop-blur-sm " +
+        "relative min-w-0 overflow-hidden border rounded-xl md:rounded-2xl shadow-sm p-3 sm:p-4 md:p-5 backdrop-blur-sm " +
         theme.card +
         " transition-colors duration-300 " +
         (highlight
@@ -2115,8 +2346,64 @@ const SectionCard = forwardRef(function SectionCard(
   );
 });
 
+function ActionIcon({ name }) {
+  const className = "h-4 w-4";
+
+  if (name === "play") {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <path d="m8 5 11 7-11 7V5Z" fill="currentColor" />
+      </svg>
+    );
+  }
+
+  if (name === "stop") {
+    return (
+      <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+        <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" />
+      </svg>
+    );
+  }
+
+  if (name === "edit") {
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={className}
+        aria-hidden="true"
+      >
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v5M14 11v5" />
+    </svg>
+  );
+}
+
 /* ---------- Tasks board (DnD-ish, priorities, deadlines, search/filters) ---------- */
-function Board({ todos, setTodos, onStartTask, activeTodoId }) {
+function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
   const theme = uiTheme();
   const [text, setText] = useState("");
   const [priority, setPriority] = useState("med");
@@ -2124,9 +2411,33 @@ function Board({ todos, setTodos, onStartTask, activeTodoId }) {
   const [time, setTime] = useState("");
   const [remind, setRemind] = useState(60);
   const [estimate, setEstimate] = useState("");
-  const [q, setQ] = useState("");
-  const [filter, setFilter] = useState("all"); // all | high | med | low | overdue | today | missed
+  const [priorityFilter, setPriorityFilter] = useState("all");
+  const [view, setView] = useState("all");
   const [nowTick, setNowTick] = useState(Date.now());
+  const [formOpen, setFormOpen] = useState(false);
+  const taskInputRef = useRef(null);
+
+  const resetTaskForm = () => {
+    setText("");
+    setPriority("med");
+    setDue("");
+    setTime("");
+    setRemind(60);
+    setEstimate("");
+  };
+
+  const openTaskForm = () => {
+    setFormOpen(true);
+  };
+
+  const closeTaskForm = () => {
+    resetTaskForm();
+    setFormOpen(false);
+  };
+
+  useEffect(() => {
+    if (formOpen) taskInputRef.current?.focus();
+  }, [formOpen]);
 
   const isOverdue = (d) => d && d < todayKey();
   const isToday = (d) => d && d === todayKey();
@@ -2205,17 +2516,11 @@ function Board({ todos, setTodos, onStartTask, activeTodoId }) {
       startedAt: null,
     };
     setTodos([t, ...todos]);
-    setText("");
-    setPriority("med");
-    setDue("");
-    setTime("");
-    setRemind(60);
-    setEstimate("");
+    resetTaskForm();
+    setFormOpen(false);
     if (Number(remind) > 0) ensurePermission();
   };
 
-  const toggle = (id) =>
-    setTodos(todos.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
   const remove = (id) => setTodos(todos.filter((t) => t.id !== id));
   const update = (id, patch) =>
     setTodos(todos.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -2224,18 +2529,17 @@ function Board({ todos, setTodos, onStartTask, activeTodoId }) {
   const done = todos.filter((t) => t.done);
 
   const match = (t) => {
-    const okQ = !q || t.title.toLowerCase().includes(q.toLowerCase());
-    let okF = true;
-    if (filter === "high") okF = t.priority === "high";
-    if (filter === "med") okF = t.priority === "med";
-    if (filter === "low") okF = t.priority === "low";
-    if (filter === "overdue") okF = isOverdue(t.due);
-    if (filter === "today") okF = isToday(t.due);
-    if (filter === "missed") okF = isMissed(t);
-    return okQ && okF;
+    const okPriority =
+      priorityFilter === "all" || t.priority === priorityFilter;
+    const okView =
+      view === "all" ||
+      view === "done" ||
+      (view === "today" && isToday(t.due)) ||
+      (view === "upcoming" && t.due && t.due > todayKey());
+    return okPriority && okView;
   };
 
-  const todo = rawTodo
+  const visibleItems = (view === "done" ? done : rawTodo)
     .slice()
     .sort((a, b) => {
       const adn = isDueNow(a),
@@ -2255,19 +2559,66 @@ function Board({ todos, setTodos, onStartTask, activeTodoId }) {
     })
     .filter(match);
 
-  const doneFiltered = done.filter(match);
-
   return (
-    <div className="grid md:grid-cols-2 gap-6">
+    <div className="min-w-0">
       <div>
-        {/* Add row */}
+        {/* The task composer stays out of the way until it is needed. */}
         <div className="mb-3">
-          <div className="flex flex-wrap items-center gap-2 gap-y-2">
-            {/* Title — full width on mobile, compact on md+ */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={openTaskForm}
+                aria-expanded={formOpen}
+                className={`h-9 rounded-xl px-4 text-sm font-medium ${POMODORO_ACTION_BUTTON}`}
+              >
+                + Add task
+              </button>
+              <select
+                value={priorityFilter}
+                onChange={(e) => setPriorityFilter(e.target.value)}
+                className={`h-9 rounded-xl border px-3 text-sm ${theme.secondaryButton}`}
+                title="Filter by priority"
+              >
+                <option value="all">All priorities</option>
+                <option value="high">High priority</option>
+                <option value="med">Medium priority</option>
+                <option value="low">Low priority</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-1 overflow-x-auto text-sm">
+              {[
+                ["all", "All"],
+                ["today", "Today"],
+                ["upcoming", "Upcoming"],
+                ["done", `Done (${done.length})`],
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setView(key)}
+                  className={`shrink-0 rounded-lg px-3 py-2 font-medium transition ${
+                    view === key
+                      ? "bg-violet-100 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300"
+                      : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {formOpen && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-2xl border border-violet-200 bg-violet-50/60 p-3 dark:border-violet-900/70 dark:bg-violet-950/20">
             <input
+              ref={taskInputRef}
               value={text}
               onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && add()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") add();
+                if (e.key === "Escape") closeTaskForm();
+              }}
               placeholder="Add a task…"
               className="h-9 min-w-0 grow basis-full md:basis-[240px] rounded-xl border border-slate-200 bg-white text-slate-900 px-3
                  focus:outline-none focus:ring-2 focus:ring-slate-300 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-100 dark:placeholder:text-slate-400"
@@ -2341,92 +2692,72 @@ function Board({ todos, setTodos, onStartTask, activeTodoId }) {
               <option value={1440}>1 day before</option>
             </select>
 
-            {/* Add — full width on mobile for easy tapping */}
             <button
               onClick={add}
-              className={`order-20 md:order-none h-9 shrink-0 px-3 rounded-xl w-full sm:w-auto ${theme.primaryButton}`}
+              className={`order-20 md:order-none h-9 shrink-0 px-3 rounded-xl w-full sm:w-auto ${POMODORO_ACTION_BUTTON}`}
             >
-              Add
+              Add task
             </button>
-          </div>
-        </div>
-
-        {/* Filters */}
-        <div className="flex items-center gap-2 mb-2">
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search…"
-            className="h-9 flex-1 rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
-          />
-          <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="h-9 rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
-            title="Filter"
-          >
-            <option value="all">All</option>
-            <option value="high">High</option>
-            <option value="med">Med</option>
-            <option value="low">Low</option>
-            <option value="today">Today</option>
-            <option value="overdue">Overdue</option>
-            <option value="missed">Missed</option>
-          </select>
-        </div>
-
-        {/* To-do */}
-        <Column
-          title={`To-do (${todo.length})`}
-          items={todo}
-          onToggle={toggle}
-          onRemove={remove}
-          onUpdate={update}
-          isDueNow={isDueNow}
-          isOverdue={isOverdue}
-          isToday={isToday}
-          isMissed={isMissed}
-          onStartTask={onStartTask}
-          activeTodoId={activeTodoId}
-          scrollMax={180}
-          showFade={true}
-          emptyMessage="No tasks yet — add your first task ✨"
-        />
-      </div>
-
-      <div>
-        {/* Header секції Done */}
-        <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
-          <h3 className="font-medium text-slate-700 dark:text-slate-300">
-            Done ({doneFiltered.length})
-          </h3>
-          {done.length > 0 && (
             <button
-              onClick={() => setTodos(todos.filter((t) => !t.done))}
-              className={`h-8 text-xs px-2 rounded-lg border ${theme.secondaryButton}`}
+              type="button"
+              onClick={closeTaskForm}
+              className={`order-20 h-9 shrink-0 rounded-xl border px-3 text-sm ${theme.secondaryButton}`}
             >
-              Clear done
+              Cancel
             </button>
+            </div>
           )}
         </div>
 
-        {/* List of completed tasks */}
-        <Column
-          title=""
-          items={doneFiltered}
-          onToggle={toggle}
-          onRemove={remove}
-          onUpdate={update}
-          isDueNow={isDueNow}
-          isOverdue={isOverdue}
-          isToday={isToday}
-          isMissed={isMissed}
-          onStartTask={onStartTask}
-          activeTodoId={activeTodoId}
-          scrollMax={180}
-          showFade={false}
-          emptyMessage="Completed tasks will show up here ✨"
-        />
+        {rawTodo.length === 0 && view !== "done" ? (
+          <div className="flex min-h-[260px] flex-col items-center justify-center px-4 py-16 text-center">
+            <div className="text-5xl" aria-hidden="true">
+              📋
+            </div>
+            <h3 className="mt-5 text-lg font-semibold text-slate-800 dark:text-slate-100">
+              No tasks yet
+            </h3>
+            <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+              Add your first task and get started!
+            </p>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={openTaskForm}
+                className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 dark:bg-violet-400 dark:text-slate-950 dark:hover:bg-violet-300"
+              >
+                + Add task
+              </button>
+              <button
+                type="button"
+                className={`rounded-xl border px-4 py-2 text-sm font-medium ${theme.secondaryButton}`}
+              >
+                Learn how
+              </button>
+            </div>
+          </div>
+        ) : (
+          <Column
+            title=""
+            items={visibleItems}
+            onRemove={remove}
+            onUpdate={update}
+            isDueNow={isDueNow}
+            isOverdue={isOverdue}
+            isToday={isToday}
+            isMissed={isMissed}
+            onStartTask={onStartTask}
+            onStopTask={onStopTask}
+            activeTodoId={activeTodoId}
+            scrollMax={300}
+            showFade={false}
+            emptyMessage={
+              view === "done"
+                ? "Completed tasks will show up here ✨"
+                : "No tasks match your filters"
+            }
+          />
+        )}
       </div>
     </div>
   );
@@ -2435,14 +2766,12 @@ function Board({ todos, setTodos, onStartTask, activeTodoId }) {
 function Column({
   title,
   items,
-  onToggle,
   onRemove,
   onUpdate,
   isDueNow,
-  isOverdue,
-  isToday,
   isMissed,
   onStartTask,
+  onStopTask,
   activeTodoId,
   scrollMax = 180,
   showFade = true,
@@ -2450,29 +2779,6 @@ function Column({
 }) {
   const MotionLi = motion.li;
   const theme = uiTheme();
-  // Local Chip (don't depend on global Pill)
-  const Chip = ({ children, tone = "slate" }) => (
-    <span
-      className={
-        "inline-flex items-center rounded-full px-2 py-0.5 text-xs " +
-        (tone === "rose"
-          ? "bg-rose-500/15 text-rose-300"
-          : tone === "sky"
-            ? "bg-sky-500/15 text-sky-300"
-            : tone === "emerald"
-              ? "bg-emerald-500/15 text-emerald-300"
-              : tone === "amber"
-                ? "bg-amber-500/15 text-amber-300"
-                : "bg-slate-500/15 text-slate-300")
-      }
-    >
-      {children}
-    </span>
-  );
-
-  const prioTone = (p) =>
-    p === "high" ? "rose" : p === "low" ? "emerald" : "amber";
-
   const Row = ({ item }) => {
     const [editing, setEditing] = useState(false);
     const [titleV, setTitleV] = useState(item.title);
@@ -2487,8 +2793,6 @@ function Column({
     );
 
     const inProgress = activeTodoId === item.id && !item.done;
-    const overdue = isOverdue(item.due);
-    const today = isToday(item.due);
     const dueNow = !inProgress && isDueNow(item);
     const missed = !inProgress && isMissed(item);
 
@@ -2504,109 +2808,126 @@ function Column({
       setEditing(false);
     };
 
+    const priorityClass =
+      item.priority === "high"
+        ? "bg-rose-50 text-rose-600 dark:bg-rose-950/50 dark:text-rose-300"
+        : item.priority === "low"
+          ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-300"
+          : "bg-amber-50 text-amber-600 dark:bg-amber-950/50 dark:text-amber-300";
+    const dateLabel = item.due
+      ? `${new Date(`${item.due}T00:00:00`).toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+        })}${item.time ? `, ${item.time}` : ""}`
+      : "No date";
+    const estimateLabel =
+      Number.isFinite(Number(item.estimateMins)) && Number(item.estimateMins) > 0
+        ? `${item.estimateMins} min`
+        : null;
+
     return (
       <MotionLi
         className={
-          "group rounded-xl border border-slate-200 dark:border-slate-700 bg-white/60 dark:bg-slate-900/60 backdrop-blur-sm " +
-          "px-3 py-2 hover:shadow-sm hover:bg-white/80 dark:hover:bg-slate-900/80 transition " +
+          "group relative rounded-xl border border-slate-200/90 bg-white/60 px-3 py-2.5 dark:border-slate-700/90 dark:bg-slate-900/40 " +
+          "transition hover:border-violet-200 hover:bg-white dark:hover:border-violet-800 dark:hover:bg-slate-800/40 " +
           (inProgress
-            ? "ring-2 ring-sky-300/70 border-sky-300 bg-sky-50/90 dark:border-sky-700 dark:bg-sky-950/30 "
+            ? "bg-violet-50/80 shadow-[inset_3px_0_0_rgb(124_58_237)] dark:bg-violet-950/25 "
             : "") +
           (dueNow
-            ? "border-amber-300 ring-2 ring-amber-200/80 bg-amber-50/90 dark:border-amber-700 dark:bg-amber-950/30 "
+            ? "bg-amber-50/70 dark:bg-amber-950/20 "
             : "") +
           (missed
-            ? "border-rose-400 ring-2 ring-rose-300/60 bg-rose-50/90 dark:border-rose-700 dark:bg-rose-950/30 "
+            ? "bg-rose-50/70 dark:bg-rose-950/20 "
             : "")
         }
       >
         {!editing ? (
-          <div className="grid grid-cols-[auto,1fr] items-start gap-3">
-            {/* Left priority stripe */}
+          <>
+          <div className="grid w-full max-w-[710px] grid-cols-[minmax(240px,1fr)_68px_72px_repeat(7,26px)] items-center gap-2">
             <span
               className={
-                "mt-1 h-8 w-1 rounded-full " +
-                (item.priority === "high"
-                  ? "bg-rose-400"
-                  : item.priority === "low"
-                    ? "bg-emerald-400"
-                    : "bg-amber-400")
+                "truncate font-medium " +
+                (item.done ? "line-through text-slate-400" : "")
               }
-            />
-            {/* Content */}
-            <div className="min-w-0">
-              <div className="flex items-start justify-between gap-3">
-                <label className="flex items-center gap-2 cursor-pointer min-w-0 flex-1">
-                  <input
-                    type="checkbox"
-                    checked={item.done}
-                    onChange={() => onToggle(item.id)}
-                  />
-                  <span
-                    className={
-                      "truncate font-medium " +
-                      (item.done ? "line-through text-slate-400" : "")
-                    }
-                    title={item.title}
-                  >
-                    {item.title}
-                  </span>
-                </label>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  {!item.done && (
-                    <button
-                      onClick={() => {
-                        onStartTask?.(item);
-                      }}
-                      className={`h-8 min-w-16 px-3 rounded-lg whitespace-nowrap text-sm ${inProgress ? theme.secondaryButton : theme.primaryButton}`}
-                      title={
-                        inProgress
-                          ? "Pomodoro is running for this task"
-                          : "Start task"
-                      }
-                    >
-                      {inProgress ? "Live" : "Start"}
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setEditing(true)}
-                    className={`h-8 px-2.5 rounded-lg border text-sm transition md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100 ${theme.secondaryButton}`}
-                    title="Edit"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => onRemove(item.id)}
-                    className={`h-8 px-2.5 rounded-lg border text-sm transition md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100 ${theme.secondaryButton}`}
-                    title="Delete"
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-
-              <div className="mt-2 flex items-center gap-1.5 flex-wrap text-xs">
-                {inProgress && <Chip tone="sky">In progress</Chip>}
-                {dueNow && <Chip tone="amber">Due now</Chip>}
-                {today && <Chip tone="sky">Today</Chip>}
-                {overdue && <Chip tone="rose">Overdue</Chip>}
-                {missed && <Chip tone="rose">Missed</Chip>}
-                {!today && !overdue && item.due && !missed && (
-                  <Chip>{item.due.slice(5)}</Chip>
-                )}
-                {item.time && <Chip tone="sky">{item.time}</Chip>}
-                {item.estimateMins ? <Chip>⏱ {item.estimateMins}m</Chip> : null}
-                <Chip tone={prioTone(item.priority)}>
-                  {item.priority === "high"
-                    ? "High"
-                    : item.priority === "low"
-                      ? "Low"
-                      : "Med"}
-                </Chip>
-              </div>
-            </div>
+              title={item.title}
+            >
+              {item.title}
+            </span>
+            <span className={`justify-self-center rounded-full px-3 py-1 text-xs font-medium ${priorityClass}`}>
+              {item.priority === "high"
+                ? "High"
+                : item.priority === "low"
+                  ? "Low"
+                  : "Med"}
+            </span>
+            {inProgress ? (
+              <span className="justify-self-center rounded-full bg-violet-100 px-2 py-1 text-[10px] font-semibold text-violet-700 dark:bg-violet-900/60 dark:text-violet-200">
+                In focus
+              </span>
+            ) : (
+              <span aria-hidden="true" />
+            )}
+            <span className="col-span-7 hidden min-w-0 justify-self-center items-center gap-2 truncate text-sm font-medium text-slate-600 sm:inline-flex dark:text-slate-300">
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-4 w-4 shrink-0"
+              >
+                <rect x="3.5" y="5.5" width="17" height="15" rx="2.5" />
+                <path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17" />
+              </svg>
+              {dateLabel}
+              {estimateLabel && (
+                <>
+                  <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">•</span>
+                  <span>{estimateLabel}</span>
+                </>
+              )}
+            </span>
           </div>
+          <div className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-3">
+            {!item.done && (
+              <button
+                onClick={() => {
+                  if (inProgress) onStopTask?.();
+                  else onStartTask?.(item);
+                }}
+                className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium ${
+                  inProgress
+                    ? "border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300 dark:hover:bg-rose-950"
+                    : POMODORO_ACTION_BUTTON
+                }`}
+                title={inProgress ? "Stop active task" : "Start task"}
+                aria-label={inProgress ? `Stop ${item.title}` : `Start ${item.title}`}
+              >
+                <ActionIcon name={inProgress ? "stop" : "play"} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className={`flex h-8 w-8 items-center justify-center rounded-lg border text-sm ${theme.secondaryButton}`}
+              title="Edit task"
+              aria-label={`Edit ${item.title}`}
+            >
+              <ActionIcon name="edit" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onRemove(item.id)}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50/50 text-sm text-rose-600 hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300 dark:hover:bg-rose-950/50"
+              title="Delete task"
+              aria-label={`Delete ${item.title}`}
+            >
+              <ActionIcon name="delete" />
+            </button>
+          </div>
+          </>
         ) : (
           <div className="flex flex-wrap items-center gap-2">
             <input
@@ -2734,6 +3055,7 @@ function Pomodoro({
   pomo,
   setPomo,
   externalStartSignal,
+  externalStopSignal,
   currentTask,
   activeHabitId,
   activeTodoId,
@@ -2750,6 +3072,9 @@ function Pomodoro({
   const timerRef = useRef(0);
   const endTimeRef = useRef(null);
   const completedRef = useRef(false);
+  // Prevent an old start signal from restarting a restored session on tab change.
+  const handledStartSignalRef = useRef(externalStartSignal);
+  const handledStopSignalRef = useRef(externalStopSignal);
   const latestStartContextRef = useRef({
     minutes: pomo.minutes,
     currentTask,
@@ -2807,7 +3132,13 @@ function Pomodoro({
   }, []);
 
   useEffect(() => {
-    if (!externalStartSignal) return;
+    if (
+      !externalStartSignal ||
+      externalStartSignal === handledStartSignalRef.current
+    ) {
+      return;
+    }
+    handledStartSignalRef.current = externalStartSignal;
 
     const {
       minutes,
@@ -2831,6 +3162,27 @@ function Pomodoro({
     setSecondsLeft(minutes * 60);
     setRunning(true);
   }, [externalStartSignal, persistActiveSession]);
+
+  useEffect(() => {
+    if (
+      !externalStopSignal ||
+      externalStopSignal === handledStopSignalRef.current
+    ) {
+      return;
+    }
+    handledStopSignalRef.current = externalStopSignal;
+    completedRef.current = false;
+    endTimeRef.current = null;
+    clearActivePomodoro();
+    cancelNativePomodoroNotification().catch((error) => {
+      console.warn("native pomodoro notification cancel failed", error);
+    });
+    setSessionTaskLabel("");
+    setSessionHabitId(null);
+    setSessionTodoId(null);
+    setRunning(false);
+    setSecondsLeft(pomo.minutes * 60);
+  }, [externalStopSignal, pomo.minutes]);
 
   useEffect(() => {
     if (!running) return;
@@ -2892,6 +3244,11 @@ function Pomodoro({
         mins: pomo.minutes,
         at: Date.now(),
         name: baseName(sessionTaskLabel || currentTask),
+        sourceType: sessionHabitId
+          ? "habit"
+          : sessionTodoId
+            ? "task"
+            : "pomodoro",
       };
       const newHistory = [...(pomo.history ?? []), entry];
       setPomo({ ...pomo, sessions, history: newHistory });
@@ -2971,16 +3328,68 @@ function Pomodoro({
     setSecondsLeft(pomo.minutes * 60);
     onSessionClear?.();
   }, [onSessionClear, pomo.minutes]);
-  const inc = (d) =>
-    setPomo({ ...pomo, minutes: Math.max(5, Math.min(60, pomo.minutes + d)) });
+  const restart = useCallback(() => {
+    completedRef.current = false;
+    endTimeRef.current = null;
+    clearActivePomodoro();
+    cancelNativePomodoroNotification().catch((error) => {
+      console.warn("native pomodoro notification cancel failed", error);
+    });
+    setSecondsLeft(pomo.minutes * 60);
+    setRunning(false);
+  }, [pomo.minutes]);
+  const inc = (delta) => {
+    const nextMinutes = Math.max(5, Math.min(60, pomo.minutes + delta));
+    if (nextMinutes === pomo.minutes) return;
+
+    setPomo({ ...pomo, minutes: nextMinutes });
+
+    if (!running) {
+      setSecondsLeft(nextMinutes * 60);
+      return;
+    }
+
+    const nextSeconds = Math.max(
+      0,
+      secondsLeft + (nextMinutes - pomo.minutes) * 60,
+    );
+    endTimeRef.current = Date.now() + nextSeconds * 1000;
+    setSecondsLeft(nextSeconds);
+    persistActiveSession({
+      endAt: endTimeRef.current,
+      taskLabel: sessionTaskLabel || currentTask || "",
+      habitId: sessionHabitId || activeHabitId || null,
+      todoId: sessionTodoId || activeTodoId || null,
+      minutes: nextMinutes,
+    });
+  };
 
   const mm = Math.floor(secondsLeft / 60)
     .toString()
     .padStart(2, "0");
   const ss = (secondsLeft % 60).toString().padStart(2, "0");
+  const progress = Math.min(
+    100,
+    Math.max(
+      0,
+      ((pomo.minutes * 60 - secondsLeft) / (pomo.minutes * 60)) * 100,
+    ),
+  );
+  const ringRadius = 106;
+  const ringCircumference = 2 * Math.PI * ringRadius;
+  const startButtonRef = useRef(null);
 
   useEffect(() => {
     const onKey = (e) => {
+      const target = e.target;
+      const isEditing =
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+
+      // Keep Pomodoro shortcuts from stealing keystrokes while the user types.
+      if (isEditing) return;
+
       if (e.code === "Space") {
         e.preventDefault();
         ensureAudioContext();
@@ -3024,130 +3433,204 @@ function Pomodoro({
   ]);
 
   return (
-    <div className="space-y-3">
-      <div className="text-5xl font-bold tabular-nums text-center">
-        {mm}:{ss}
+    <div className="space-y-2 px-2 py-1 sm:px-3">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+          Pomodoro
+        </h2>
+        <span className="text-sm font-medium text-slate-500 dark:text-slate-400">
+          Session {pomo.sessions ?? 0}
+        </span>
+      </div>
+      <div className="flex justify-center">
+        <div className="relative h-[230px] w-[230px] sm:h-[252px] sm:w-[252px]">
+          <svg
+            className="h-full w-full -rotate-90 drop-shadow-[0_10px_20px_rgba(124,58,237,0.14)]"
+            viewBox="0 0 236 236"
+            aria-hidden="true"
+          >
+            <circle
+              cx="118"
+              cy="118"
+              r={ringRadius}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="10"
+              strokeDasharray="2 7"
+              className="text-violet-300 dark:text-violet-700"
+            />
+            <circle
+              cx="118"
+              cy="118"
+              r={ringRadius}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="10"
+              strokeLinecap="round"
+              strokeDasharray={ringCircumference}
+              strokeDashoffset={ringCircumference * (1 - progress / 100)}
+              className="text-violet-500 transition-[stroke-dashoffset] duration-300 dark:text-violet-300"
+            />
+          </svg>
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
+            <span className="rounded-md bg-violet-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-violet-600 dark:bg-violet-950/50 dark:text-violet-300">
+              Focus time
+            </span>
+            <span className="mt-3 text-5xl font-bold tabular-nums tracking-tight text-slate-900 dark:text-slate-100 sm:text-6xl">
+              {mm}:{ss}
+            </span>
+            <button
+              ref={startButtonRef}
+              onClick={async () => {
+                ensureAudioContext();
+                await ensurePermission();
+                setRunning((prev) => {
+                  const next = !prev;
+                  if (next) {
+                    completedRef.current = false;
+                    endTimeRef.current = Date.now() + secondsLeft * 1000;
+                    persistActiveSession({
+                      endAt: endTimeRef.current,
+                      taskLabel: sessionTaskLabel || currentTask || "",
+                      habitId: sessionHabitId || activeHabitId || null,
+                      todoId: sessionTodoId || activeTodoId || null,
+                      minutes: Math.ceil(secondsLeft / 60),
+                    });
+                  } else {
+                    endTimeRef.current = null;
+                    clearActivePomodoro();
+                    cancelNativePomodoroNotification().catch((error) => {
+                      console.warn(
+                        "native pomodoro notification cancel failed",
+                        error,
+                      );
+                    });
+                  }
+                  return next;
+                });
+              }}
+              className="mt-5 min-w-28 rounded-full bg-gradient-to-r from-violet-600 to-indigo-600 px-5 py-2 text-xs font-semibold text-white shadow-[0_14px_30px_rgba(124,58,237,0.38)] transition hover:from-violet-500 hover:to-indigo-500 focus:outline-none focus:ring-2 focus:ring-violet-400 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
+            >
+              {running ? "Ⅱ Pause" : "▶ Start"}
+            </button>
+          </div>
+        </div>
       </div>
       {(sessionTaskLabel || currentTask) && (
-        <div className="text-xs text-center text-slate-500 dark:text-slate-400">
-          Now: {sessionTaskLabel || currentTask}
+        <div className="mx-auto max-w-sm rounded-2xl border border-violet-200/80 bg-violet-50/70 px-4 py-3 dark:border-violet-900/70 dark:bg-violet-950/30">
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Working on
+          </p>
+          <p className="mt-1 truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
+            {sessionTaskLabel || currentTask}
+          </p>
         </div>
       )}
 
-      <div className="flex justify-center gap-2">
-        <button
-          onClick={async () => {
-            ensureAudioContext();
-            await ensurePermission();
-            setRunning((prev) => {
-              const next = !prev;
-              if (next) {
-                completedRef.current = false;
-                endTimeRef.current = Date.now() + secondsLeft * 1000;
-                persistActiveSession({
-                  endAt: endTimeRef.current,
-                  taskLabel: sessionTaskLabel || currentTask || "",
-                  habitId: sessionHabitId || activeHabitId || null,
-                  todoId: sessionTodoId || activeTodoId || null,
-                  minutes: Math.ceil(secondsLeft / 60),
-                });
-              } else {
-                endTimeRef.current = null;
-                clearActivePomodoro();
-                cancelNativePomodoroNotification().catch((error) => {
-                  console.warn(
-                    "native pomodoro notification cancel failed",
-                    error,
-                  );
-                });
-              }
-              return next;
-            });
-          }}
-          className={`h-9 px-3 rounded-xl w-24 ${theme.primaryButton}`}
-        >
-          {running ? "Pause" : "Start"}
-        </button>
-        <button
-          onClick={reset}
-          className={`h-9 px-3 rounded-xl border w-24 ${theme.secondaryButton}`}
-        >
-          Reset
-        </button>
-      </div>
-
-      <div className="flex items-center justify-center gap-2 text-sm">
+      <div className="mx-auto flex w-full max-w-md items-center justify-between gap-3 text-sm">
         <button
           onClick={() => inc(-5)}
-          className={`h-8 px-2 rounded-lg border ${theme.secondaryButton}`}
+          className={`h-9 shrink-0 rounded-lg border px-3 text-xs font-medium ${theme.secondaryButton}`}
         >
-          −5m
+          − 5 min
         </button>
-        <span className="text-slate-600 dark:text-slate-300">
-          Length: {pomo.minutes}m
+        <span className="whitespace-nowrap text-xs font-medium text-slate-600 dark:text-slate-300">
+          Length: {pomo.minutes} min
         </span>
         <button
           onClick={() => inc(5)}
-          className={`h-8 px-2 rounded-lg border ${theme.secondaryButton}`}
+          className={`h-9 shrink-0 rounded-lg border px-3 text-xs font-medium ${theme.secondaryButton}`}
         >
-          +5m
+          + 5 min
         </button>
       </div>
 
-      {/* Volume */}
-      <div className="flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-        <span>Volume</span>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.05"
-          value={volume}
-          onChange={(e) => setVolume(parseFloat(e.target.value))}
-          className="w-40"
-          style={{
-            accentColor: isDark() ? theme.rangeAccentDark : theme.rangeAccent,
-          }}
-          aria-label="Win sound volume"
-        />
-        <span>{Math.round(volume * 100)}%</span>
-      </div>
-
-      {/* Melody */}
-      <div className="flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-        <span>Melody</span>
-        <select
-          value={melody}
-          onChange={(e) => setMelody(e.target.value)}
-          className="h-8 rounded-lg border px-2 bg-white dark:bg-slate-900 dark:border-slate-700"
-          aria-label="Win melody"
-        >
-          {Object.entries(MELODIES).map(([key, cfg]) => (
-            <option key={key} value={key}>
-              {cfg.label}
-            </option>
-          ))}
-        </select>
+      <div className="flex items-center justify-center gap-5 pt-1">
         <button
-          onClick={() => playMelodyByName(ensureAudioContext(), melody, volume)}
-          className={`h-8 px-2 rounded-lg border ${theme.secondaryButton}`}
+          type="button"
+          onClick={restart}
+          className="text-xs font-medium text-slate-500 transition hover:text-violet-600 dark:text-slate-400 dark:hover:text-violet-300"
+          title="Restart the focus timer from the selected duration"
         >
-          Test
+          ↻ Restart
         </button>
-      </div>
+        <details>
+          <summary className="cursor-pointer text-xs font-medium text-slate-500 marker:content-none dark:text-slate-400">
+            ⚙ Timer settings
+          </summary>
+        <div className="mt-3 space-y-3">
+          {/* Volume */}
+          <div className="flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <span>Volume</span>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={volume}
+              onChange={(e) => setVolume(parseFloat(e.target.value))}
+              className="w-40"
+              style={{
+                accentColor: isDark()
+                  ? theme.rangeAccentDark
+                  : theme.rangeAccent,
+              }}
+              aria-label="Win sound volume"
+            />
+            <span>{Math.round(volume * 100)}%</span>
+          </div>
 
-      <p className="text-xs text-center text-slate-500 dark:text-slate-400">
-        Sessions: {pomo.sessions ?? 0}
-      </p>
+          {/* Melody */}
+          <div className="flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <span>Melody</span>
+            <select
+              value={melody}
+              onChange={(e) => setMelody(e.target.value)}
+              className="h-8 rounded-lg border px-2 bg-white dark:bg-slate-900 dark:border-slate-700"
+              aria-label="Win melody"
+            >
+              {Object.entries(MELODIES).map(([key, cfg]) => (
+                <option key={key} value={key}>
+                  {cfg.label}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() =>
+                playMelodyByName(ensureAudioContext(), melody, volume)
+              }
+              className={`h-8 rounded-lg border px-2 ${theme.secondaryButton}`}
+            >
+              Test
+            </button>
+          </div>
+          </div>
+        </details>
+      </div>
     </div>
   );
 }
 
 /* ===================== Habits ===================== */
-function Habits({ habits, setHabits, onStartHabit }) {
+function Habits({
+  habits,
+  setHabits,
+  onStartHabit,
+  onStopHabit,
+  activeHabitId,
+}) {
   const theme = uiTheme();
   const [name, setName] = useState("");
   const [mins, setMins] = useState(15);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingHabitId, setEditingHabitId] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [editMins, setEditMins] = useState(15);
+  const habitInputRef = useRef(null);
+  const focusHabitInput = () => setFormOpen(true);
+  useEffect(() => {
+    if (formOpen) habitInputRef.current?.focus();
+  }, [formOpen]);
 
   const toggleDone = (id) => {
     const day = todayKey();
@@ -3172,6 +3655,31 @@ function Habits({ habits, setHabits, onStartHabit }) {
   };
 
   const remove = (id) => setHabits(habits.filter((h) => h.id !== id));
+  const startEdit = (habit) => {
+    setEditingHabitId(habit.id);
+    setEditName(habit.name);
+    setEditMins(habit.mins);
+  };
+  const saveEdit = () => {
+    if (!editName.trim()) return;
+    const nextMins = Math.max(5, Math.min(60, Number(editMins) || 15));
+    setHabits(
+      habits.map((habit) =>
+        habit.id === editingHabitId
+          ? { ...habit, name: editName.trim(), mins: nextMins }
+          : habit,
+      ),
+    );
+    setEditingHabitId(null);
+  };
+  const todayColumn = (new Date().getDay() + 6) % 7;
+  const completedToday = habits.filter((h) => h.lastDone === todayKey()).length;
+  const habitIconStyles = [
+    "bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300",
+    "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
+    "bg-violet-100 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300",
+    "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300",
+  ];
 
   const add = () => {
     if (!name.trim()) return;
@@ -3182,13 +3690,38 @@ function Habits({ habits, setHabits, onStartHabit }) {
     ]);
     setName("");
     setMins(15);
+    setFormOpen(false);
   };
 
   return (
     <div>
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">
+            Habits &amp; Streaks
+          </h2>
+          {habits.length > 0 && (
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {habits.length} active {habits.length === 1 ? "habit" : "habits"}
+              <span className="mx-2 text-slate-300 dark:text-slate-600">•</span>
+              <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                {completedToday} completed today
+              </span>
+            </p>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={focusHabitInput}
+          className="rounded-xl bg-violet-50 px-3 py-2 text-sm font-medium text-violet-600 transition hover:bg-violet-100 hover:text-violet-700 dark:bg-violet-950/50 dark:text-violet-300 dark:hover:bg-violet-950"
+        >
+          + Add habit
+        </button>
+      </div>
       {/* Input row */}
-      <div className="flex gap-2 mb-3">
+      <div className={`mb-3 flex flex-wrap gap-2 ${formOpen ? "" : "hidden"}`}>
         <input
+          ref={habitInputRef}
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && add()}
@@ -3215,70 +3748,173 @@ function Habits({ habits, setHabits, onStartHabit }) {
       </div>
 
       {/* Scroll list */}
-      <div className="mt-3 pr-2 h-64 overflow-y-auto custom-scroll">
-        <ul className="space-y-2">
-          {habits.map((h) => {
+      <div
+        className={`mt-3 pr-2 overflow-y-auto custom-scroll ${habits.length > 5 ? "max-h-[340px]" : ""}`}
+      >
+        {habits.length > 0 && (
+          <div className="mb-2 ml-3 grid w-full max-w-[710px] grid-cols-[minmax(240px,1fr)_68px_72px_repeat(7,26px)] items-center gap-2 text-xs font-semibold text-slate-400 dark:text-slate-500">
+            <span />
+            <span />
+            <span />
+            {"MTWTFSS".split("").map((day, index) => (
+              <span key={`${day}-${index}`} className="text-center">
+                {day}
+              </span>
+            ))}
+          </div>
+        )}
+        <ul className={habits.length > 0 ? "space-y-1" : "space-y-2"}>
+          {habits.map((h, habitIndex) => {
             const isDoneToday = h.lastDone === todayKey();
+            const activeDays = Math.min(
+              7,
+              Math.max(isDoneToday ? 1 : 0, h.streak || 0),
+            );
+            const firstActiveDay = Math.max(0, todayColumn - activeDays + 1);
+            const habitIcon = inferTag(h.name)?.icon || "✦";
             return (
               <li
                 key={h.id}
-                className={`group flex items-center justify-between rounded-xl border px-3 py-2 transition
+                className={`group relative rounded-xl border px-3 py-2.5 transition
                   ${
                     isDoneToday
-                      ? "bg-emerald-50 border-emerald-300 dark:bg-emerald-900/30 dark:border-emerald-700"
-                      : "bg-slate-50 border-slate-200 dark:bg-slate-900/60 dark:border-slate-700"
+                      ? "border-emerald-200 bg-emerald-50/50 dark:border-emerald-800 dark:bg-emerald-900/20"
+                      : "border-slate-200/80 bg-white/60 hover:border-violet-200 dark:border-slate-700/80 dark:bg-slate-900/40 dark:hover:border-violet-800"
                   }`}
               >
-                <div>
-                  <div className="font-medium flex items-center gap-2">
-                    {h.name} - <span className="text-slate-500">{h.mins}m</span>
-                    {isDoneToday && (
-                      <span
-                        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs
-                                       bg-emerald-500/15 text-emerald-600 dark:text-emerald-300"
-                      >
-                        ✓ Today
+                {editingHabitId === h.id ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      value={editName}
+                      onChange={(event) => setEditName(event.target.value)}
+                      onKeyDown={(event) => event.key === "Enter" && saveEdit()}
+                      className="h-8 min-w-0 flex-1 rounded-lg border px-3 text-sm dark:border-slate-700 dark:bg-slate-900"
+                      aria-label="Habit name"
+                    />
+                    <input
+                      type="number"
+                      min={5}
+                      max={60}
+                      value={editMins}
+                      onChange={(event) => setEditMins(event.target.value)}
+                      className="h-8 w-16 rounded-lg border px-2 text-center text-sm dark:border-slate-700 dark:bg-slate-900"
+                      aria-label="Habit minutes"
+                    />
+                    <button
+                      type="button"
+                      onClick={saveEdit}
+                      className={`h-8 rounded-lg px-3 text-sm ${theme.primaryButton}`}
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingHabitId(null)}
+                      className={`h-8 rounded-lg border px-3 text-sm ${theme.secondaryButton}`}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid w-full max-w-[710px] grid-cols-[minmax(240px,1fr)_68px_72px_repeat(7,26px)] items-center gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 font-medium">
+                          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm ${habitIconStyles[habitIndex % habitIconStyles.length]}`}>
+                            {habitIcon}
+                          </span>
+                          <span className="truncate">{h.name}</span>
+                        </div>
+                      </div>
+
+                      <span className="inline-flex shrink-0 whitespace-nowrap items-center justify-center gap-1 text-sm font-semibold text-slate-600 dark:text-slate-300">
+                        {h.mins} min
+                        <span className="text-emerald-500" aria-label="minutes">♨</span>
                       </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                    Streak: {h.streak} day{h.streak === 1 ? "" : "s"}
-                  </div>
-                </div>
+                      <span aria-hidden="true" />
+                      {Array.from({ length: 7 }, (_, index) => {
+                        const completed =
+                          index >= firstActiveDay && index <= todayColumn;
+                        const dotClass = `mx-auto h-3 w-3 rounded-full border transition ${
+                          completed
+                            ? "border-emerald-400 bg-emerald-400"
+                            : "border-slate-300 dark:border-slate-600"
+                        }`;
 
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => onStartHabit?.(h)}
-                    className={`px-2 py-1 rounded-lg border text-sm ${theme.secondaryButton}`}
-                  >
-                    Start
-                  </button>
+                        return index === todayColumn ? (
+                          <button
+                            key={index}
+                            type="button"
+                            onClick={() => toggleDone(h.id)}
+                            className={dotClass}
+                            aria-label={`${isDoneToday ? "Mark" : "Mark"} ${h.name} done today`}
+                            title={isDoneToday ? "Undo today" : "Mark done today"}
+                          />
+                        ) : (
+                          <span key={index} className={dotClass} />
+                        );
+                      })}
+                    </div>
 
-                  <button
-                    onClick={() => toggleDone(h.id)}
-                    className={`px-2 py-1 rounded-lg text-sm transition
-                      ${
-                        isDoneToday
-                          ? "bg-emerald-500 text-white hover:bg-emerald-600"
-                          : theme.secondaryButton
-                      }`}
-                  >
-                    {isDoneToday ? "Done ✓" : "Done today"}
-                  </button>
-
-                  <button
-                    onClick={() => remove(h.id)}
-                    className="opacity-0 group-hover:opacity-100 transition text-sm text-slate-500 dark:text-slate-400"
-                  >
-                    Delete
-                  </button>
-                </div>
+                    <div className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (activeHabitId === h.id) onStopHabit?.();
+                          else onStartHabit?.(h);
+                        }}
+                        className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium ${
+                          activeHabitId === h.id
+                            ? "border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300 dark:hover:bg-rose-950"
+                            : POMODORO_ACTION_BUTTON
+                        }`}
+                      >
+                        <ActionIcon
+                          name={activeHabitId === h.id ? "stop" : "play"}
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => startEdit(h)}
+                        className={`flex h-8 w-8 items-center justify-center rounded-lg border text-sm ${theme.secondaryButton}`}
+                        title="Edit habit"
+                        aria-label={`Edit ${h.name}`}
+                      >
+                        <ActionIcon name="edit" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => remove(h.id)}
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50/50 text-sm text-rose-600 hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300 dark:hover:bg-rose-950/50"
+                        title="Delete habit"
+                        aria-label={`Delete ${h.name}`}
+                      >
+                        <ActionIcon name="delete" />
+                      </button>
+                    </div>
+                  </>
+                )}
               </li>
             );
           })}
           {habits.length === 0 && (
-            <li className="text-sm text-slate-400 dark:text-slate-500">
-              No habits yet — start with one small habit 🌱
+            <li className="flex flex-col items-center justify-center px-4 py-8 text-center">
+              <div className="text-5xl" aria-hidden="true">
+                🌱
+              </div>
+              <h3 className="mt-5 text-lg font-semibold text-slate-900 dark:text-slate-100">
+                No habits yet
+              </h3>
+              <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                Build small habits and watch your progress grow.
+              </p>
+              <button
+                type="button"
+                onClick={focusHabitInput}
+                className="mt-6 rounded-xl border border-violet-200 bg-white px-4 py-2 text-sm font-medium text-violet-600 hover:bg-violet-50 dark:border-violet-800 dark:bg-slate-900 dark:text-violet-300 dark:hover:bg-violet-950/40"
+              >
+                + Add habit
+              </button>
             </li>
           )}
         </ul>
@@ -3354,17 +3990,20 @@ function inferTag(rawName) {
 function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
   const theme = uiTheme();
   const [goal, setGoal] = useState(load("ff.goalMins", 60));
+  const [shareOpen, setShareOpen] = useState(false);
+  const [sharePreviewUrl, setSharePreviewUrl] = useState("");
+  const [sharePreviewLoading, setSharePreviewLoading] = useState(false);
   useEffect(() => save("ff.goalMins", goal), [goal]);
 
   const [view, setView] = useState("today"); // "today" | "yesterday" | "last7"
 
   const doneToday = sumTodayMinutes(pomo.history);
-  const pct = Math.min(100, Math.round((doneToday / (goal || 1)) * 100));
   const todaySessions = (pomo.history ?? []).filter(
     (e) => e.day === todayKey(),
   );
-  const habitsDoneToday = (habits ?? []).filter(
-    (h) => h.lastDone === todayKey(),
+  const habitsDoneToday = useMemo(
+    () => (habits ?? []).filter((h) => h.lastDone === todayKey()),
+    [habits],
   );
   const longestStreak =
     (habits ?? []).reduce((max, h) => Math.max(max, h.streak || 0), 0) || 0;
@@ -3375,21 +4014,73 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
       ? String(todaySessions[0].label).split("•")[0].trim()
       : "");
 
+  const createAchievementFile = useCallback(async () => {
+    const blob = await createAchievementCardBlob({
+      avatarSrc,
+      profileName,
+      doneToday,
+      goal,
+      sessionCount: todaySessions.length,
+      topSessionName,
+      habitsDoneToday,
+      longestStreak,
+    });
+    return new File([blob], "focusflow-achievement.png", {
+      type: "image/png",
+    });
+  }, [
+    avatarSrc,
+    profileName,
+    doneToday,
+    goal,
+    habitsDoneToday,
+    longestStreak,
+    todaySessions.length,
+    topSessionName,
+  ]);
+
+  useEffect(() => {
+    if (!shareOpen) return undefined;
+
+    let active = true;
+    let previewUrl = "";
+    setSharePreviewLoading(true);
+    createAchievementFile()
+      .then((file) => {
+        if (!active) return;
+        previewUrl = URL.createObjectURL(file);
+        setSharePreviewUrl(previewUrl);
+      })
+      .catch(() => toast.error("Couldn't create the achievement card"))
+      .finally(() => {
+        if (active) setSharePreviewLoading(false);
+      });
+
+    return () => {
+      active = false;
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      setSharePreviewUrl("");
+    };
+  }, [createAchievementFile, shareOpen]);
+
+  const downloadAchievementCard = useCallback(async () => {
+    try {
+      const file = await createAchievementFile();
+      const url = URL.createObjectURL(file);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = file.name;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast.success("Achievement card downloaded");
+    } catch {
+      toast.error("Couldn't download the achievement card");
+    }
+  }, [createAchievementFile]);
+
   const shareAchievements = useCallback(async () => {
     try {
-      const blob = await createAchievementCardBlob({
-        avatarSrc,
-        profileName,
-        doneToday,
-        goal,
-        sessionCount: todaySessions.length,
-        topSessionName,
-        habitsDoneToday,
-        longestStreak,
-      });
-      const file = new File([blob], "focusflow-achievement.png", {
-        type: "image/png",
-      });
+      const file = await createAchievementFile();
 
       if (
         navigator.share &&
@@ -3401,35 +4092,12 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
         });
         return;
       }
-
-      if (window.ClipboardItem && navigator.clipboard?.write) {
-        const item = new ClipboardItem({ "image/png": blob });
-        await navigator.clipboard.write([item]);
-        toast.success("Story card copied as image");
-        return;
-      }
-
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "focusflow-achievement.png";
-      a.click();
-      URL.revokeObjectURL(url);
-      toast.success("Achievement card downloaded");
+      await downloadAchievementCard();
     } catch (err) {
       if (err?.name === "AbortError") return;
       toast.error("Couldn't share right now");
     }
-  }, [
-    avatarSrc,
-    profileName,
-    doneToday,
-    goal,
-    habitsDoneToday,
-    longestStreak,
-    todaySessions.length,
-    topSessionName,
-  ]);
+  }, [createAchievementFile, downloadAchievementCard]);
 
   const sessions = useMemo(() => {
     const hist = pomo.history ?? [];
@@ -3467,6 +4135,13 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
   }, [pomo.history, view]);
 
   const totalMins = sessions.reduce((s, e) => s + (e.mins || 0), 0);
+  const displayMinutes = totalMins;
+  const displayPct = Math.min(
+    100,
+    Math.round((displayMinutes / (goal || 1)) * 100),
+  );
+  const viewLabel =
+    view === "today" ? "Today" : view === "yesterday" ? "Yesterday" : "Last 7 days";
 
   const fmtMeta = (e) => {
     const time = e.at
@@ -3480,24 +4155,126 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
   };
 
   return (
-    <div className="space-y-4">
-      {/* Header + progress */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex-1">
-          <div className="flex items-baseline justify-between">
-            <div className="text-lg font-semibold">Daily Goal</div>
-            <div className="text-sm text-slate-500 dark:text-slate-400">
-              {doneToday} / {goal} min
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold tracking-tight">Daily Goal</h2>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShareOpen(true)}
+            className="text-sm font-semibold text-violet-600 transition hover:text-violet-500 dark:text-violet-300 dark:hover:text-violet-200"
+          >
+            ↗ Share
+          </button>
+          <details className="relative">
+            <summary className="cursor-pointer list-none text-sm font-medium text-violet-600 marker:content-none dark:text-violet-300">
+              {viewLabel} <span aria-hidden="true">⌄</span>
+            </summary>
+            <div className="absolute right-0 top-[calc(100%+8px)] z-30 w-32 rounded-xl border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+              {[
+                ["today", "Today"],
+                ["yesterday", "Yesterday"],
+                ["last7", "Last 7 days"],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={(event) => {
+                    setView(value);
+                    event.currentTarget.closest("details")?.removeAttribute("open");
+                  }}
+                  className={`w-full rounded-lg px-2 py-1.5 text-left text-xs transition ${
+                    view === value
+                      ? "bg-violet-50 text-violet-700 dark:bg-violet-950/50 dark:text-violet-300"
+                      : "text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
-          </div>
+          </details>
+        </div>
+      </div>
 
-          <div className="h-3 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden mt-2">
-            <div
-              className={`h-full transition-all bg-gradient-to-r ${theme.progress}`}
-              style={{ width: `${pct}%` }}
+      <div className="mt-2 flex items-center gap-3">
+        <div className="relative h-28 w-28 shrink-0">
+          <svg
+            className="h-full w-full -rotate-90"
+            viewBox="0 0 112 112"
+            aria-hidden="true"
+          >
+            <circle
+              cx="56"
+              cy="56"
+              r="46"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="9"
+              className="text-slate-200 dark:text-slate-700"
             />
-          </div>
+            <circle
+              cx="56"
+              cy="56"
+              r="46"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="9"
+              strokeLinecap="round"
+              strokeDasharray={2 * Math.PI * 46}
+              strokeDashoffset={2 * Math.PI * 46 * (1 - displayPct / 100)}
+              className="text-violet-500 transition-[stroke-dashoffset] duration-300 dark:text-violet-300"
+            />
+          </svg>
+          <span className="absolute inset-0 flex items-center justify-center text-2xl font-semibold">
+            {displayPct}%
+          </span>
+        </div>
 
+        <div className="flex min-w-0 shrink-0 items-center divide-x divide-slate-200 text-sm dark:divide-slate-700">
+          <div className="min-w-0 pr-5">
+            <p className="text-slate-500 dark:text-slate-400">
+              <strong className="text-base text-slate-900 dark:text-slate-100">
+                {displayMinutes}
+              </strong>{" "}
+              / {goal} min
+            </p>
+            <p className="mt-1 text-slate-500 dark:text-slate-400">
+              <span className="inline-flex items-center gap-1">
+                Focus time
+                <HelpTip label="Focus time information" symbol="ⓘ">
+                  The total minutes from completed Pomodoro sessions in the selected period.
+                </HelpTip>
+              </span>
+            </p>
+          </div>
+          <div className="min-w-0 pl-5">
+            <p className="text-slate-500 dark:text-slate-400">
+              <strong className="text-base text-slate-900 dark:text-slate-100">
+                {sessions.length}
+              </strong>{" "}
+              / 3
+            </p>
+            <p className="mt-1 text-slate-500 dark:text-slate-400">
+              <span className="inline-flex items-center gap-1">
+                Sessions
+                <HelpTip label="Sessions information" symbol="ⓘ">
+                  The number of completed Pomodoro sessions in the selected period.
+                </HelpTip>
+              </span>
+            </p>
+          </div>
+        </div>
+        <div className="shrink-0 translate-x-[108px] rounded-xl bg-violet-50 px-4 py-3 text-center text-sm font-medium text-violet-600 dark:bg-violet-950/35 dark:text-violet-300">
+          {displayPct > 0
+            ? "✦  Great progress! Keep going 💪"
+            : "✦  Set a goal and start your first focus session!"}
+        </div>
+      </div>
+
+      <details className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+        <summary className="cursor-pointer">Goal and history</summary>
+        <div className="mt-3">
           <div className="mt-2 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2">
             <span>Goal:</span>
             <input
@@ -3518,44 +4295,24 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
           </div>
         </div>
 
-        {/* View switch + total */}
+        {/* Total and sharing */}
         <div className="shrink-0 text-right">
-          <div className="inline-flex rounded-xl border bg-slate-100 p-1 dark:bg-slate-900/60 dark:border-slate-700">
-            {["today", "yesterday", "last7"].map((v) => (
-              <button
-                key={v}
-                onClick={() => setView(v)}
-                className={
-                  "px-3 py-1 text-xs rounded-lg transition " +
-                  (view === v
-                    ? "bg-white dark:bg-slate-800 shadow border dark:border-slate-700"
-                    : "opacity-70 hover:opacity-100")
-                }
-              >
-                {v === "today"
-                  ? "Today"
-                  : v === "yesterday"
-                    ? "Yesterday"
-                    : "Last 7"}
-              </button>
-            ))}
-          </div>
           <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
             Total: <span className="font-medium">{totalMins}m</span>
           </div>
           <button
-            onClick={shareAchievements}
+            onClick={() => setShareOpen(true)}
             className={`mt-3 inline-flex items-center rounded-xl px-3 py-2 text-xs ${theme.primaryButton}`}
           >
             Share story card
           </button>
         </div>
-      </div>
+      </details>
 
       {/* Timeline */}
-      <div className="relative">
+      <div className="relative mt-2 min-h-0 flex-1">
         <div className="absolute left-3 top-0 bottom-0 w-px bg-slate-200 dark:bg-slate-700" />
-        <div className="pl-8 max-h-40 overflow-y-auto custom-scroll space-y-2">
+        <div className="h-full pl-8 overflow-y-auto custom-scroll space-y-2">
           {sessions.length === 0 ? (
             <div className="text-sm text-slate-400 dark:text-slate-500">
               No sessions here - start one ⏱️
@@ -3568,14 +4325,25 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
                 (e.label ? String(e.label).split("•")[0].trim() : "") ||
                 "Pomodoro";
               const tag = inferTag(name);
+              const sourceBadge = {
+                habit: { label: "Habit", icon: "♨", cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" },
+                task: { label: "Task", icon: "✓", cls: "bg-sky-500/15 text-sky-700 dark:text-sky-300" },
+                pomodoro: { label: "Focus", icon: "⏱", cls: "bg-violet-500/15 text-violet-700 dark:text-violet-300" },
+              }[e.sourceType || (name === "Pomodoro" ? "pomodoro" : "task")];
               return (
                 <div
                   key={(e.at || Math.random()) + e.day}
-                  className="relative rounded-xl border bg-slate-50 px-3 py-2 border-slate-200 dark:bg-slate-900/60 dark:border-slate-700"
+                  className="relative rounded-xl border border-slate-200 bg-slate-50 px-3 py-1 dark:bg-slate-900/60 dark:border-slate-700"
                 >
-                  <div className="absolute -left-4 top-3 w-2 h-2 rounded-full bg-sky-400 ring-4 ring-sky-400/15" />
+                  <div className="absolute -left-4 top-2.5 h-2 w-2 rounded-full bg-sky-400 ring-4 ring-sky-400/15" />
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs ${sourceBadge.cls}`}
+                      >
+                        <span>{sourceBadge.icon}</span>
+                        {sourceBadge.label}
+                      </span>
                       {tag && (
                         <span
                           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${tag.cls}`}
@@ -3601,65 +4369,205 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
           )}
         </div>
       </div>
+
+      {shareOpen &&
+        createPortal(
+          <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/65 p-4 backdrop-blur-sm">
+            <div className="flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-y-auto rounded-3xl border border-white/30 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900 sm:p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-lg font-bold">Share your win</p>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  Your name and profile photo are included on the card.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShareOpen(false)}
+                className={`h-9 w-9 shrink-0 rounded-xl border text-lg ${theme.secondaryButton}`}
+                aria-label="Close sharing dialog"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mt-4 flex min-h-64 items-center justify-center overflow-hidden rounded-2xl bg-slate-100 p-3 dark:bg-slate-800">
+              {sharePreviewLoading ? (
+                <span className="text-sm text-slate-500 dark:text-slate-400">
+                  Creating your card...
+                </span>
+              ) : sharePreviewUrl ? (
+                <img
+                  src={sharePreviewUrl}
+                  alt="FocusFlow achievement card preview"
+                  className="max-h-[52vh] w-auto rounded-xl shadow-lg"
+                />
+              ) : (
+                <span className="text-sm text-slate-500 dark:text-slate-400">
+                  Card preview unavailable.
+                </span>
+              )}
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={downloadAchievementCard}
+                className={`rounded-xl border px-4 py-3 text-sm font-semibold ${theme.secondaryButton}`}
+              >
+                ⇩ Download PNG
+              </button>
+              <button
+                type="button"
+                onClick={shareAchievements}
+                className={`rounded-xl px-4 py-3 text-sm font-semibold ${theme.primaryButton}`}
+              >
+                ↗ Send to friends
+              </button>
+            </div>
+          </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
 
 /* ===================== Weekly Chart ===================== */
-function WeeklyChart({ pomo }) {
-  const theme = uiTheme();
+function WeeklyChart({ pomo, todos = [] }) {
+  const localDateKey = (date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
   const data = useMemo(() => {
     const now = new Date();
     const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - now.getDay()); // Sunday
+    const mondayOffset = (now.getDay() + 6) % 7;
+    weekStart.setDate(now.getDate() - mondayOffset);
     const days = Array.from({ length: 7 }, (_, i) => {
       const d = new Date(weekStart);
       d.setDate(weekStart.getDate() + i);
       return {
-        key: d.toISOString().slice(0, 10),
+        key: localDateKey(d),
         label: d.toLocaleDateString(undefined, { weekday: "short" }),
+        date: d.getDate(),
         mins: 0,
+        tasks: 0,
       };
     });
     (pomo.history ?? []).forEach((e) => {
       const idx = days.findIndex((d) => d.key === e.day);
       if (idx >= 0) days[idx].mins += e.mins;
     });
+    (todos ?? []).forEach((todo) => {
+      const idx = days.findIndex((d) => d.key === todo.due);
+      if (idx >= 0) days[idx].tasks += 1;
+    });
     return days;
-  }, [pomo.history]);
-
-  const dark = isDark();
+  }, [pomo.history, todos]);
+  const maxMinutes = Math.max(
+    1,
+    ...data.map((day) => day.mins),
+  );
+  const currentDay = todayKey();
 
   return (
-    <div className="h-44 sm:h-56">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart
-          data={data}
-          margin={{ top: 10, right: 20, bottom: 0, left: 0 }}
-        >
-          <CartesianGrid
-            stroke={dark ? "#334155" : "#e2e8f0"}
-            strokeDasharray="3 3"
-          />
-          <XAxis dataKey="label" stroke={dark ? "#94a3b8" : "#64748b"} />
-          <YAxis allowDecimals={false} stroke={dark ? "#94a3b8" : "#64748b"} />
-          <Tooltip
-            contentStyle={{
-              background: dark ? "#0f172a" : "#ffffff",
-              border: `1px solid ${isDark() ? "#334155" : "#e2e8f0"}`,
-            }}
-            labelStyle={{ color: dark ? "#e2e8f0" : "#0f172a" }}
-            formatter={(v) => `${v} min`}
-          />
-          <Line
-            type="monotone"
-            dataKey="mins"
-            stroke={dark ? theme.chartDark : theme.chart}
-            strokeWidth={2}
-            dot={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+    <div className="space-y-3">
+      <h2 className="text-lg font-semibold tracking-tight">This Week</h2>
+      <div className="grid min-w-0 grid-cols-7 divide-x divide-slate-200/80 dark:divide-slate-700/80">
+          {data.map((day) => {
+            const active = day.key === currentDay;
+            const value = day.mins;
+            const barHeight = Math.max(
+              6,
+              Math.round((value / maxMinutes) * 38),
+            );
+            return (
+              <div
+                key={day.key}
+                className={`mx-1 flex min-w-0 flex-col items-center rounded-xl px-1 py-2 text-center sm:px-2 ${
+                  active
+                    ? "border border-violet-300 bg-[radial-gradient(ellipse_at_50%_62%,rgba(196,181,253,0.46)_0%,rgba(237,233,254,0.34)_48%,transparent_84%)] shadow-[0_12px_28px_rgba(124,58,237,0.16)] dark:border-violet-500/70 dark:bg-[radial-gradient(ellipse_at_50%_62%,rgba(124,58,237,0.38)_0%,rgba(49,46,129,0.22)_55%,transparent_84%)]"
+                    : ""
+                }`}
+              >
+                <span
+                  className={`text-sm font-medium ${active ? "text-violet-700 dark:text-violet-300" : "text-slate-500 dark:text-slate-400"}`}
+                >
+                  {day.label} {day.date}
+                </span>
+                <span className="mt-2.5 text-xs font-medium text-slate-700 dark:text-slate-300">
+                  {day.mins} min
+                </span>
+                <div className="mt-2 flex h-10 items-end justify-center">
+                  <div
+                    className="w-11 rounded-t-md bg-gradient-to-t from-violet-500 to-violet-300 transition-all dark:from-violet-500 dark:to-violet-300 sm:w-14"
+                    style={{ height: `${barHeight}px` }}
+                  />
+                </div>
+                <span className="mt-2 text-xs text-slate-400 dark:text-slate-500">
+                  {day.tasks} task{day.tasks === 1 ? "" : "s"}
+                </span>
+              </div>
+            );
+          })}
+      </div>
+    </div>
+  );
+}
+
+function WeeklyOverview({ pomo, todos, onViewStatistics }) {
+  const weekStart = useMemo(() => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+    return date.getTime();
+  }, []);
+
+  const focusMinutes = useMemo(
+    () =>
+      (pomo.history ?? []).reduce((total, session) => {
+        const sessionTime = new Date(`${session.day}T00:00:00`).getTime();
+        return sessionTime >= weekStart ? total + (session.mins || 0) : total;
+      }, 0),
+    [pomo.history, weekStart],
+  );
+  const completedTasks = useMemo(
+    () =>
+      (todos ?? []).filter(
+        (todo) => todo.done && (todo.doneAt || todo.createdAt || 0) >= weekStart,
+      ).length,
+    [todos, weekStart],
+  );
+
+  return (
+    <div className="flex h-full flex-col">
+      <h2 className="text-lg font-semibold tracking-tight">Overview</h2>
+      <div className="mt-4 space-y-4">
+        <div className="flex items-start gap-3">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-600 dark:bg-violet-950/60 dark:text-violet-300">◷</span>
+          <div>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Total focus time</p>
+            <p className="text-xl font-bold">{focusMinutes} min</p>
+          </div>
+        </div>
+        <div className="flex items-start gap-3">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-600 dark:bg-violet-950/60 dark:text-violet-300">☑</span>
+          <div>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Tasks completed</p>
+            <p className="text-xl font-bold">{completedTasks}</p>
+          </div>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onViewStatistics}
+        className="mt-auto pt-5 text-left text-sm font-semibold text-violet-600 transition hover:text-violet-500 dark:text-violet-300"
+      >
+        View full statistics →
+      </button>
     </div>
   );
 }
