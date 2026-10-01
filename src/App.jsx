@@ -3110,6 +3110,13 @@ function Column({
       Number.isFinite(Number(item.estimateMins)) && Number(item.estimateMins) > 0
         ? `${item.estimateMins} min`
         : null;
+    const reminderMinutes = Number(item.remindMins) || 0;
+    const reminderLabel =
+      item.due && item.time && reminderMinutes > 0
+        ? reminderMinutes >= 60 && reminderMinutes % 60 === 0
+          ? `${reminderMinutes / 60}h before`
+          : `${reminderMinutes}m before`
+        : null;
 
     return (
       <MotionLi
@@ -3191,6 +3198,30 @@ function Column({
                 <>
                   <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">•</span>
                   <span>{estimateLabel}</span>
+                </>
+              )}
+              {reminderLabel && (
+                <>
+                  <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">•</span>
+                  <span
+                    className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-violet-600 dark:text-violet-300"
+                    title={`Reminder ${reminderLabel}`}
+                  >
+                    <svg
+                      aria-hidden="true"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="h-3.5 w-3.5"
+                    >
+                      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+                      <path d="M10 21h4" />
+                    </svg>
+                    {reminderLabel}
+                  </span>
                 </>
               )}
             </span>
