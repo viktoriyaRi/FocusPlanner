@@ -1,12 +1,13 @@
 const CACHE_NAME = "focusplanner-v2";
+const BASE_PATH = new URL(self.registration.scope).pathname;
 const APP_SHELL = [
-  "/FocusPlanner/",
-  "/FocusPlanner/manifest.webmanifest",
-  "/FocusPlanner/favicon.png",
-  "/FocusPlanner/icons/icon-192.png",
-  "/FocusPlanner/icons/icon-512.png",
-  "/FocusPlanner/notification-energy-icon.svg",
-  "/FocusPlanner/notification-energy-badge.svg",
+  BASE_PATH,
+  `${BASE_PATH}manifest.webmanifest`,
+  `${BASE_PATH}favicon.png`,
+  `${BASE_PATH}icons/icon-192.png`,
+  `${BASE_PATH}icons/icon-512.png`,
+  `${BASE_PATH}notification-energy-icon.svg`,
+  `${BASE_PATH}notification-energy-badge.svg`,
 ];
 
 self.addEventListener("install", (event) => {
@@ -49,7 +50,7 @@ self.addEventListener("fetch", (event) => {
           }
           return response;
         })
-        .catch(() => caches.match("/FocusPlanner/"));
+        .catch(() => caches.match(BASE_PATH));
     })
   );
 });
