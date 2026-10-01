@@ -1,6 +1,6 @@
 {
   "appId": "com.focusflow.app",
-  "appName": "FocusFlow",
+  "appName": "FocusPlanner",
   "webDir": "dist",
   "bundledWebRuntime": false,
   "server": {

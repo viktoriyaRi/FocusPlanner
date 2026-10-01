@@ -397,6 +397,21 @@ async function ensurePermission() {
   return p === "granted";
 }
 
+async function ensureExactNativeAlarms() {
+  if (!isNativeApp() || Capacitor.getPlatform() !== "android") return true;
+
+  try {
+    const current = await LocalNotifications.checkExactNotificationSetting();
+    if (current.exact_alarm === "granted") return true;
+
+    const updated = await LocalNotifications.changeExactNotificationSetting();
+    return updated.exact_alarm === "granted";
+  } catch (error) {
+    console.warn("exact alarm permission check failed", error);
+    return false;
+  }
+}
+
 async function cancelNativePomodoroNotification() {
   if (!isNativeApp()) return;
   await LocalNotifications.cancel({
@@ -2056,38 +2071,44 @@ export default function FocusFlow() {
                   Replay app tour
                 </button>
               </div>
-              {!isNativeApp() && (
-                <div className="space-y-2">
-                  <h3 className="font-semibold">Notifications</h3>
-                  <button
-                    onClick={async () => {
-                      primeAudio();
-                      const okSecure = secureOk();
-                      if (!okSecure) {
-                        toast.error("Notifications need HTTPS or localhost");
-                        return;
-                      }
-                      const ok = await ensurePermission();
-                      if (ok) {
-                        notify("✅ Notifications enabled", {
-                          body: "I'll alert you here.",
-                          silent: false,
-                        });
-                        const ctx = ensureAudioContext();
-                        if (ctx) playBeep(ctx, 0.9);
-                        toast.success("Notifications enabled");
-                      } else {
-                        toast.error(
-                          "Allow notifications in the browser settings",
-                        );
-                      }
-                    }}
-                    className={`w-full px-4 py-2 rounded-lg border text-sm ${pageThemeConfig.secondaryButton}`}
-                  >
-                    Enable Notifications
-                  </button>
-                </div>
-              )}
+              <div className="space-y-2">
+                <h3 className="font-semibold">Notifications</h3>
+                <button
+                  onClick={async () => {
+                    primeAudio();
+                    if (!isNativeApp() && !secureOk()) {
+                      toast.error("Notifications need HTTPS or localhost");
+                      return;
+                    }
+
+                    const ok = await ensurePermission();
+                    if (!ok) {
+                      toast.error(
+                        isNativeApp()
+                          ? "Allow notifications in your phone settings"
+                          : "Allow notifications in the browser settings",
+                      );
+                      return;
+                    }
+
+                    const exact = await ensureExactNativeAlarms();
+                    notify("✅ Notifications enabled", {
+                      body: "I'll alert you here.",
+                      silent: false,
+                    });
+                    const ctx = ensureAudioContext();
+                    if (ctx) playBeep(ctx, 0.9);
+                    toast.success(
+                      exact
+                        ? "Notifications enabled"
+                        : "Notifications enabled. Android may delay alarms.",
+                    );
+                  }}
+                  className={`w-full px-4 py-2 rounded-lg border text-sm ${pageThemeConfig.secondaryButton}`}
+                >
+                  Enable Notifications
+                </button>
+              </div>
               {!isInstalled && installPrompt && (
                 <div className="space-y-2">
                   <h3 className="font-semibold">Install</h3>
