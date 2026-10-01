@@ -1,4 +1,4 @@
-# FocusFlow
+# FocusPlanner
 
 Tiny productivity app that combines a **Pomodoro timer**, **mini-kanban tasks**, and **habits** - with browser notifications and a daily goal. Works fully in the browser and stores data locally.
 

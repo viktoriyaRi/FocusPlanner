@@ -14,6 +14,19 @@ export default defineConfig(({ mode }) => ({
     // Keep Vite from crawling generated Capacitor HTML entrypoints under ios/android.
     entries: ["index.html"],
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Keep stable framework and device integrations in cacheable files.
+        manualChunks: {
+          "react-vendor": ["react", "react-dom"],
+          motion: ["framer-motion"],
+          capacitor: ["@capacitor/core", "@capacitor/local-notifications"],
+          confetti: ["canvas-confetti"],
+        },
+      },
+    },
+  },
   server: {
     watch: {
       ignored: ["**/ios/**", "**/android/**", "**/dist/**"],

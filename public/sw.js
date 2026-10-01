@@ -1,4 +1,4 @@
-const CACHE_NAME = "focusflow-v1";
+const CACHE_NAME = "focusplanner-v2";
 const APP_SHELL = [
   "/focusflow/",
   "/focusflow/manifest.webmanifest",

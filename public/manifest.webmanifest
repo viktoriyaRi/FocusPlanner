@@ -1,6 +1,6 @@
 {
-  "name": "FocusFlow",
-  "short_name": "FocusFlow",
+  "name": "FocusPlanner",
+  "short_name": "FocusPlanner",
   "description": "Pomodoro timer, tasks, habits, and daily wins in one focused app.",
   "start_url": "/focusflow/",
   "scope": "/focusflow/",

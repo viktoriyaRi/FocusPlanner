@@ -29,6 +29,12 @@ body {
   overflow-x: hidden;
 }
 
+#root {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 .profile-name {
   font-family: Georgia, "Times New Roman", serif;
   font-weight: 600;

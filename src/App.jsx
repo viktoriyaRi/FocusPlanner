@@ -2,6 +2,7 @@ import {
   forwardRef,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -10,17 +11,16 @@ import { createPortal } from "react-dom";
 import { motion } from "framer-motion";
 import { Capacitor } from "@capacitor/core";
 import { LocalNotifications } from "@capacitor/local-notifications";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-} from "recharts";
 import { Toaster, toast } from "react-hot-toast";
 import confetti from "canvas-confetti";
+import {
+  buildWeeklyActivity,
+  completeHabit,
+  normalizeHabit,
+  uncompleteHabit,
+  weeklySummary,
+} from "./lib/activity";
+import focusPlannerMark from "./assets/focusplanner-logo.png";
 
 /* ===================== Theme boot ===================== */
 const THEME_KEY = "theme";
@@ -524,9 +524,7 @@ async function notify(title, options = {}) {
   }
 }
 
-function showPomodoroCompleteToast({ task, minutes, sessions }) {
-  const taskLabel = String(task || "Focus session").trim();
-
+function showPomodoroCompleteToast() {
   toast.custom(
     (t) => (
       <div
@@ -575,6 +573,29 @@ function showPomodoroCompleteToast({ task, minutes, sessions }) {
       duration: 4000,
       position: "top-right",
     },
+  );
+}
+
+function showUndoToast(message, onUndo) {
+  toast.custom(
+    (toastItem) => (
+      <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+        <span className="text-sm font-medium text-slate-700 dark:text-slate-100">
+          {message}
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            onUndo();
+            toast.dismiss(toastItem.id);
+          }}
+          className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-500"
+        >
+          Undo
+        </button>
+      </div>
+    ),
+    { duration: 6000 },
   );
 }
 
@@ -668,7 +689,7 @@ async function createAchievementCardBlob({
 
   ctx.fillStyle = "rgba(255,255,255,0.88)";
   ctx.font = "600 28px Avenir Next, Inter, sans-serif";
-  ctx.fillText("FocusFlow", 260, 150);
+  ctx.fillText("FocusPlanner", 260, 150);
   ctx.font = '600 34px Georgia, "Times New Roman", serif';
   ctx.fillText(profileName || "achievement card", 260, 190);
 
@@ -774,7 +795,7 @@ async function createAchievementCardBlob({
 
   ctx.fillStyle = "rgba(255,255,255,0.82)";
   ctx.font = "600 28px Avenir Next, Inter, sans-serif";
-  ctx.fillText("#FocusFlow   #productivevibes   #littlewins", 132, 1696);
+  ctx.fillText("#FocusPlanner   #productivevibes   #littlewins", 132, 1696);
 
   return await new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
@@ -1054,10 +1075,11 @@ const loadStoredText = (key, fallback = "") => {
 
 const getSavedAvatar = () => loadStoredText(AVATAR_KEY, DEFAULT_AVATAR_URL);
 const getSavedProfileName = () => loadStoredText(PROFILE_NAME_KEY, "");
-/** @typedef {{ id: string, title: string, done: boolean, createdAt: number,
+/** @typedef {{ id: string, title: string, done: boolean, createdAt: number, doneAt?: number,
       priority?: 'low'|'med'|'high', due?: string, time?: string, remindMins?: number,
       estimateMins?: number, startedAt?: number|null }} Todo */
-/** @typedef {{ id: string, name: string, streak: number, lastDone: string, mins: number }} Habit */
+/** @typedef {{ id: string, name: string, streak: number, lastDone: string, mins: number,
+      completedDays?: string[] }} Habit */
 
 export default function FocusFlow() {
   const [themeTick, setThemeTick] = useState(0);
@@ -1078,6 +1100,7 @@ export default function FocusFlow() {
   const pomoRef = useRef(null);
   const habitsRef = useRef(null);
   const goalRef = useRef(null);
+  const headerRef = useRef(null);
   const pageThemeConfig = PAGE_THEMES[pageTheme] || PAGE_THEMES.midnight;
   const darkMode = isDark();
   const shellStyle = {
@@ -1119,7 +1142,7 @@ export default function FocusFlow() {
     const onInstalled = () => {
       setIsInstalled(true);
       setInstallPrompt(null);
-      toast.success("FocusFlow installed");
+      toast.success("FocusPlanner installed");
     };
 
     const standalone =
@@ -1145,18 +1168,16 @@ export default function FocusFlow() {
     setInstallPrompt(null);
   }, [installPrompt]);
 
-  const markHabitDoneById = (id) => {
+  const markHabitDoneById = (id, minutes) => {
     if (!id) return;
     setHabits((prev) =>
       prev.map((h) => {
         if (h.id !== id) return h;
-        const day = todayKey();
-        const isNewDay = h.lastDone !== day;
-        return {
-          ...h,
-          lastDone: day,
-          streak: isNewDay ? h.streak + 1 : h.streak,
-        };
+        return completeHabit(h, {
+          day: todayKey(),
+          mins: minutes ?? h.mins,
+          source: "pomodoro",
+        });
       }),
     );
     setActiveHabitId(null); // скидаємо "активну" звичку після автопозначення
@@ -1166,7 +1187,9 @@ export default function FocusFlow() {
     if (!id) return;
     setTodos((prev) =>
       prev.map((t) =>
-        t.id === id ? { ...t, done: true, startedAt: null } : t,
+        t.id === id
+          ? { ...t, done: true, doneAt: Date.now(), startedAt: null }
+          : t,
       ),
     );
     setActiveTodoId((current) => (current === id ? null : current));
@@ -1193,8 +1216,7 @@ export default function FocusFlow() {
   const [habits, setHabits] = useState(
     /** @type {Habit[]} */ (
       (load("ff.habits", []) || []).map((h) => ({
-        ...h,
-        mins: typeof h.mins === "number" ? h.mins : 15,
+        ...normalizeHabit(h),
       }))
     ),
   );
@@ -1301,6 +1323,13 @@ export default function FocusFlow() {
   const tourSteps = useMemo(
     () => [
       {
+        key: "header",
+        title: "Your workspace",
+        description:
+          "Use the header to move between pages, change the colour theme, update your avatar and name, or reset all app data to start fresh.",
+        ref: headerRef,
+      },
+      {
         key: "tasks",
         title: "Tasks",
         description:
@@ -1325,7 +1354,7 @@ export default function FocusFlow() {
         key: "goal",
         title: "Daily Goal",
         description:
-          "Track your focused minutes, see progress for today and share your win with a story card.",
+          "Track your focused minutes and sessions. Use Share to preview a personal result card, then send it to friends or download it.",
         ref: goalRef,
       },
     ],
@@ -1333,6 +1362,7 @@ export default function FocusFlow() {
   );
   const tourActive = tourStepIndex >= 0;
   const currentTourStep = tourActive ? tourSteps[tourStepIndex] : null;
+  const [tourPopoverPosition, setTourPopoverPosition] = useState(null);
 
   const completeOnboarding = useCallback(() => {
     localStorage.setItem(ONBOARDING_DONE_KEY, "1");
@@ -1342,6 +1372,12 @@ export default function FocusFlow() {
   }, []);
 
   const startTour = useCallback(() => {
+    setShowWelcome(false);
+    setTourStepIndex(0);
+  }, []);
+
+  const restartTour = useCallback(() => {
+    setCurrentPage("dashboard");
     setShowWelcome(false);
     setTourStepIndex(0);
   }, []);
@@ -1366,6 +1402,41 @@ export default function FocusFlow() {
       behavior: "smooth",
       block: "center",
     });
+  }, [currentTourStep, tourActive]);
+
+  useLayoutEffect(() => {
+    if (!tourActive || !currentTourStep?.ref?.current) {
+      setTourPopoverPosition(null);
+      return undefined;
+    }
+
+    const updatePosition = () => {
+      const rect = currentTourStep.ref.current.getBoundingClientRect();
+      const margin = 16;
+      const gap = 14;
+      const width = Math.min(400, window.innerWidth - margin * 2);
+      const estimatedHeight = currentTourStep.key === "goal" ? 270 : 215;
+      const left = Math.max(
+        margin,
+        Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - margin),
+      );
+      const belowTop = rect.bottom + gap;
+      const top =
+        belowTop + estimatedHeight <= window.innerHeight - margin
+          ? belowTop
+          : Math.max(margin, rect.top - estimatedHeight - gap);
+
+      setTourPopoverPosition({ top: Math.round(top), left: Math.round(left), width });
+    };
+
+    const frame = requestAnimationFrame(updatePosition);
+    window.addEventListener("resize", updatePosition);
+    document.addEventListener("scroll", updatePosition, true);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updatePosition);
+      document.removeEventListener("scroll", updatePosition, true);
+    };
   }, [currentTourStep, tourActive]);
 
   // One-time "today tasks" summary (do NOT ask for permission here)
@@ -1547,19 +1618,28 @@ export default function FocusFlow() {
       {/* Main Content Area */}
       <div className="min-w-0 flex-1 flex flex-col overflow-hidden">
         {/* Top Header */}
-        <header className="relative z-30 border-b border-slate-200/80 bg-white/75 px-4 backdrop-blur dark:border-slate-700/80 dark:bg-slate-950/75 sm:px-7">
-          <div className="flex h-16 items-center gap-5">
+        <header
+          ref={headerRef}
+          className={`relative z-30 border-b border-slate-200/80 bg-white/75 px-4 backdrop-blur transition-shadow dark:border-slate-700/80 dark:bg-slate-950/75 sm:px-7 ${
+            tourActive && currentTourStep?.key === "header"
+              ? "z-50 ring-2 ring-sky-300/85 shadow-[0_0_0_9999px_rgba(15,23,42,0.18)]"
+              : ""
+          }`}
+        >
+          <div className="flex h-16 items-center gap-2 sm:gap-5">
             <button
               type="button"
               onClick={() => setCurrentPage("dashboard")}
               className="flex shrink-0 items-center gap-2.5 text-left"
               aria-label="Go to dashboard"
             >
-              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 via-indigo-500 to-blue-500 text-xl text-white shadow-md shadow-violet-500/25">
-                ✦
-              </span>
-              <span className="text-xl font-bold tracking-tight sm:text-2xl">
-                Focus<span className="text-violet-600 dark:text-violet-300">Flow</span>
+              <img
+                src={focusPlannerMark}
+                alt="FocusPlanner"
+                className="h-10 w-10 scale-[1.15] object-contain"
+              />
+              <span className="inline text-base font-bold tracking-tight sm:text-2xl">
+                Focus<span className="text-violet-600 dark:text-violet-300">Planner</span>
               </span>
             </button>
 
@@ -1589,7 +1669,7 @@ export default function FocusFlow() {
               ))}
             </nav>
 
-            <div className="ml-auto flex items-center gap-2">
+            <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
               <div className="relative hidden sm:block">
                 <button
                   type="button"
@@ -1597,7 +1677,7 @@ export default function FocusFlow() {
                     await ensurePermission();
                     setNotificationsOpen((open) => !open);
                   }}
-                  className={`relative inline-flex h-11 w-11 items-center justify-center rounded-2xl border transition hover:-translate-y-0.5 hover:shadow-md ${pageThemeConfig.secondaryButton}`}
+                  className={`relative inline-flex h-9 w-9 items-center justify-center rounded-xl border transition hover:-translate-y-0.5 hover:shadow-md sm:h-11 sm:w-11 sm:rounded-2xl ${pageThemeConfig.secondaryButton}`}
                   title="Today's reminders"
                   aria-label="Today's reminders"
                   aria-expanded={notificationsOpen}
@@ -1658,6 +1738,26 @@ export default function FocusFlow() {
                 )}
               </div>
               <button
+                type="button"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Clear all FocusPlanner data and restart the app? This cannot be undone.",
+                    )
+                  ) {
+                    resetApp();
+                  }
+                }}
+                className={`hidden h-9 w-9 items-center justify-center rounded-xl border transition hover:-translate-y-0.5 hover:shadow-md sm:inline-flex sm:h-11 sm:w-11 sm:rounded-2xl ${pageThemeConfig.secondaryButton}`}
+                title="Reset all data"
+                aria-label="Reset all data"
+              >
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M20 11a8 8 0 1 0 2 5.2" />
+                  <path d="M20 4v7h-7" />
+                </svg>
+              </button>
+              <button
                 onClick={() => {
                   const r = document.documentElement;
                   const next = r.classList.toggle("dark");
@@ -1665,7 +1765,7 @@ export default function FocusFlow() {
                   setThemeTick((t) => t + 1);
                   primeAudio();
                 }}
-                className={`inline-flex h-11 w-11 items-center justify-center rounded-2xl border transition hover:-translate-y-0.5 hover:shadow-md ${pageThemeConfig.secondaryButton}`}
+                className={`hidden h-9 w-9 items-center justify-center rounded-xl border transition hover:-translate-y-0.5 hover:shadow-md sm:inline-flex sm:h-11 sm:w-11 sm:rounded-2xl ${pageThemeConfig.secondaryButton}`}
                 title="Toggle theme"
                 aria-label="Toggle theme"
               >
@@ -1674,35 +1774,110 @@ export default function FocusFlow() {
                   <path d="M12 2v2.5M12 19.5V22M4.93 4.93 6.7 6.7m10.6 10.6 1.77 1.77M2 12h2.5M19.5 12H22M4.93 19.07 6.7 17.3M17.3 6.7l1.77-1.77" />
                 </svg>
               </button>
+              <details className="static sm:hidden">
+                <summary
+                  className={`flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-xl border text-lg transition hover:shadow-md marker:content-none ${pageThemeConfig.secondaryButton}`}
+                  aria-label="Open app controls"
+                >
+                  ⋯
+                </summary>
+                <div className="absolute right-3 top-[calc(100%+8px)] z-[80] w-64 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                  <div className="flex items-center justify-between gap-2 px-1 pb-2">
+                    <span className="text-sm font-semibold">Quick controls</span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      {todayReminders.length} reminders
+                    </span>
+                  </div>
+                  <div className="max-h-32 space-y-1 overflow-y-auto rounded-xl bg-slate-50 p-2 text-xs dark:bg-slate-800/70">
+                    {todayReminders.length === 0 ? (
+                      <p className="px-2 py-2 text-slate-500 dark:text-slate-400">No reminders for today.</p>
+                    ) : (
+                      todayReminders.map((todo) => (
+                        <div key={todo.id} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5">
+                          <span className="truncate font-medium">{todo.title}</span>
+                          <span className="shrink-0 text-slate-500 dark:text-slate-400">{todo.time}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  <div className="mt-3 grid gap-2 border-t border-slate-200 pt-3 dark:border-slate-700">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const root = document.documentElement;
+                        const next = root.classList.toggle("dark");
+                        localStorage.setItem(THEME_KEY, next ? "dark" : "light");
+                        setThemeTick((tick) => tick + 1);
+                        primeAudio();
+                      }}
+                      className={`rounded-xl border px-3 py-2 text-left text-sm font-medium ${pageThemeConfig.secondaryButton}`}
+                    >
+                      ◐ Change theme
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (window.confirm("Clear all FocusPlanner data and restart the app? This cannot be undone.")) resetApp();
+                      }}
+                      className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-left text-sm font-medium text-rose-600 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300"
+                    >
+                      ↻ Reset all data
+                    </button>
+                  </div>
+                </div>
+              </details>
               <AvatarPicker
                 compact
                 avatarSrc={avatarSrc}
                 profileName={profileName}
                 onChangeAvatar={setAvatarSrc}
                 onChangeName={setProfileName}
+                tourOpen={tourActive && currentTourStep?.key === "header"}
               />
             </div>
           </div>
+          <nav className="flex gap-1 overflow-x-auto pb-2 md:hidden" aria-label="Mobile navigation">
+            {[
+              ["dashboard", "Dashboard"],
+              ["tasks", "Tasks"],
+              ["pomodoro", "Focus"],
+              ["habits", "Habits"],
+              ["statistics", "Stats"],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setCurrentPage(id)}
+                className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  currentPage === id
+                    ? "bg-violet-100 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300"
+                    : "text-slate-600 dark:text-slate-300"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
         </header>
 
         {/* Content Area */}
-        <div className="min-w-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+        <div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-4 sm:px-6 sm:py-5">
           {currentPage === "dashboard" && (
-          <div className="w-full">
+          <div className="w-full min-w-0">
               <div className="mb-6">
-                <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
-                  Welcome to FocusFlow! 👋
+                <h1 className="text-lg font-semibold tracking-tight sm:text-xl">
+                  Welcome to FocusPlanner! 👋
                 </h1>
                 <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                   Let's plan your day and make it productive.
                 </p>
               </div>
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-12">
+              <div className="grid gap-3 xl:grid-cols-12">
               {/* Tasks Section */}
               <SectionCard
                 ref={tasksRef}
                 highlight={tourActive && currentTourStep?.key === "tasks"}
-                className="self-start xl:col-span-6"
+                className="xl:col-span-6"
               >
                 <h2 className="text-lg font-semibold mb-4">
                   Tasks (Mini-Kanban)
@@ -1720,7 +1895,7 @@ export default function FocusFlow() {
               <SectionCard
                 ref={pomoRef}
                 highlight={tourActive && currentTourStep?.key === "pomodoro"}
-                className="xl:col-span-6 bg-[radial-gradient(ellipse_at_50%_62%,rgba(196,181,253,0.46)_0%,rgba(237,233,254,0.34)_48%,transparent_84%)] dark:bg-[radial-gradient(ellipse_at_50%_62%,rgba(124,58,237,0.38)_0%,rgba(49,46,129,0.22)_55%,transparent_84%)]"
+                className="xl:col-span-6 sm:!p-3 md:!p-3 bg-[radial-gradient(ellipse_at_50%_62%,rgba(196,181,253,0.46)_0%,rgba(237,233,254,0.34)_48%,transparent_84%)] dark:bg-[radial-gradient(ellipse_at_50%_62%,rgba(124,58,237,0.38)_0%,rgba(49,46,129,0.22)_55%,transparent_84%)]"
               >
                 <Pomodoro
                   pomo={pomo}
@@ -1740,7 +1915,7 @@ export default function FocusFlow() {
               <SectionCard
                 ref={habitsRef}
                 highlight={tourActive && currentTourStep?.key === "habits"}
-                className="self-start xl:col-span-6"
+                className="xl:col-span-6"
               >
                 <Habits
                   habits={habits}
@@ -1762,13 +1937,19 @@ export default function FocusFlow() {
                   habits={habits}
                   avatarSrc={avatarSrc}
                   profileName={profileName}
+                  tourPreviewOpen={tourActive && currentTourStep?.key === "goal"}
                 />
               </SectionCard>
 
               {/* Weekly summary */}
-              <div className="md:col-span-2 xl:col-span-12">
+              <div className="xl:col-span-12">
                 <SectionCard>
-                  <WeeklyChart key={themeTick} pomo={pomo} todos={todos} />
+                  <WeeklyChart
+                    key={themeTick}
+                    pomo={pomo}
+                    todos={todos}
+                    habits={habits}
+                  />
                 </SectionCard>
               </div>
               </div>
@@ -1817,8 +1998,26 @@ export default function FocusFlow() {
           )}
 
           {currentPage === "statistics" && (
-            <div>
-              <WeeklyChart key={themeTick} pomo={pomo} />
+            <div className="grid gap-4 xl:grid-cols-12">
+              <SectionCard className="xl:col-span-7">
+                <WeeklyChart
+                  key={themeTick}
+                  pomo={pomo}
+                  todos={todos}
+                  habits={habits}
+                />
+              </SectionCard>
+              <SectionCard className="xl:col-span-5">
+                <DailyGoal
+                  pomo={pomo}
+                  habits={habits}
+                  avatarSrc={avatarSrc}
+                  profileName={profileName}
+                />
+              </SectionCard>
+              <SectionCard className="xl:col-span-12">
+                <WeeklyInsights pomo={pomo} todos={todos} habits={habits} />
+              </SectionCard>
             </div>
           )}
 
@@ -1849,6 +2048,13 @@ export default function FocusFlow() {
                   className={`w-full px-4 py-2 rounded-lg text-sm ${pageThemeConfig.primaryButton}`}
                 >
                   Reset App
+                </button>
+                <button
+                  type="button"
+                  onClick={restartTour}
+                  className={`w-full rounded-lg border px-4 py-2 text-sm ${pageThemeConfig.secondaryButton}`}
+                >
+                  Replay app tour
                 </button>
               </div>
               {!isNativeApp() && (
@@ -1915,13 +2121,13 @@ export default function FocusFlow() {
       {showWelcome && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-[2px]">
           <div
-            className={`w-full max-w-md rounded-3xl border p-6 shadow-2xl ${pageThemeConfig.card}`}
+            className={`w-full max-w-md rounded-3xl border border-slate-200/90 !bg-white p-6 shadow-2xl backdrop-blur-xl dark:border-slate-700/90 dark:!bg-slate-900 ${pageThemeConfig.card}`}
           >
             <p className="text-xs uppercase tracking-[0.22em] text-sky-400/90">
               Welcome
             </p>
             <h2 className="mt-2 text-2xl font-bold tracking-tight">
-              Meet FocusFlow
+              Meet FocusPlanner
             </h2>
             <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
               Manage tasks, focus sessions, habits and your daily goal in one
@@ -1948,9 +2154,21 @@ export default function FocusFlow() {
       {tourActive && currentTourStep && (
         <>
           <div className="fixed inset-0 z-40 bg-slate-950/28 backdrop-blur-[1px]" />
-          <div className="fixed inset-x-4 bottom-4 z-50 mx-auto max-w-xl">
+          {createPortal(
+          <div
+            className="fixed z-[100] w-[calc(100vw-2rem)] max-w-md transition-[top,left] duration-200"
+            style={
+              tourPopoverPosition
+                ? {
+                    top: tourPopoverPosition.top,
+                    left: tourPopoverPosition.left,
+                    width: tourPopoverPosition.width,
+                  }
+                : { top: 16, left: 16 }
+            }
+          >
             <div
-              className={`rounded-3xl border p-4 shadow-2xl md:p-5 ${pageThemeConfig.card}`}
+              className={`rounded-3xl border border-slate-200/90 !bg-white p-4 shadow-2xl backdrop-blur-xl dark:border-slate-700/90 dark:!bg-slate-900 md:p-5 ${pageThemeConfig.card}`}
             >
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -1964,12 +2182,14 @@ export default function FocusFlow() {
                     {currentTourStep.description}
                   </p>
                 </div>
-                <button
-                  onClick={completeOnboarding}
-                  className={`rounded-full border px-3 py-1 text-xs ${pageThemeConfig.secondaryButton}`}
-                >
-                  Skip
-                </button>
+                {tourStepIndex < tourSteps.length - 1 && (
+                  <button
+                    onClick={completeOnboarding}
+                    className={`rounded-full border px-3 py-1 text-xs ${pageThemeConfig.secondaryButton}`}
+                  >
+                    Skip
+                  </button>
+                )}
               </div>
               <div className="mt-4 flex items-center justify-between gap-3">
                 <button
@@ -1979,15 +2199,19 @@ export default function FocusFlow() {
                 >
                   Back
                 </button>
-                <button
-                  onClick={nextTourStep}
-                  className={`rounded-xl px-4 py-2 text-sm ${pageThemeConfig.primaryButton}`}
-                >
-                  {tourStepIndex === tourSteps.length - 1 ? "Finish" : "Next"}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={nextTourStep}
+                    className={`rounded-xl px-4 py-2 text-sm ${pageThemeConfig.primaryButton}`}
+                  >
+                    {tourStepIndex === tourSteps.length - 1 ? "Finish" : "Next"}
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
+          </div>,
+          document.body,
+          )}
         </>
       )}
     </div>
@@ -2068,6 +2292,7 @@ function AvatarPicker({
   onChangeAvatar,
   onChangeName,
   compact = false,
+  tourOpen = false,
 }) {
   const theme = uiTheme();
   const [open, setOpen] = useState(false);
@@ -2077,6 +2302,10 @@ function AvatarPicker({
   useEffect(() => {
     if (open) setDraftName(profileName);
   }, [open, profileName]);
+
+  useEffect(() => {
+    setOpen(tourOpen);
+  }, [tourOpen]);
 
   const applyAvatar = useCallback(
     (src) => {
@@ -2130,7 +2359,7 @@ function AvatarPicker({
           <img
             src={avatarSrc}
             alt={profileName || "Profile"}
-            className="h-12 w-12 rounded-2xl border-2 border-white/80 object-cover shadow-md shadow-violet-500/15 dark:border-slate-700"
+            className="h-10 w-10 rounded-xl border-2 border-white/80 object-cover shadow-md shadow-violet-500/15 sm:h-12 sm:w-12 sm:rounded-2xl dark:border-slate-700"
           />
           <span className="hidden max-w-28 text-left sm:block">
             <span className="block truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
@@ -2197,7 +2426,7 @@ function AvatarPicker({
 
       {open && (
         <div
-          className={`absolute top-[calc(100%+12px)] z-[70] max-h-[min(78vh,640px)] w-[min(92vw,420px)] overflow-y-auto rounded-3xl border p-5 shadow-2xl backdrop-blur custom-scroll ${compact ? "right-0" : "left-0"} ${theme.card}`}
+          className={`absolute top-[calc(100%+12px)] z-[100] max-h-[min(78vh,640px)] w-[min(92vw,420px)] overflow-y-auto rounded-3xl border border-slate-200 bg-white p-4 shadow-2xl custom-scroll sm:p-5 dark:border-slate-700 dark:bg-slate-900 ${compact ? "right-0" : "left-0"}`}
         >
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -2215,7 +2444,7 @@ function AvatarPicker({
             </button>
           </div>
 
-          <div className="mt-5 flex gap-4 border-t border-slate-200/70 pt-5 dark:border-slate-700/70">
+          <div className="mt-5 flex flex-col gap-4 border-t border-slate-200/70 pt-5 sm:flex-row dark:border-slate-700/70">
             <label className="group relative shrink-0 cursor-pointer">
               <img
                 src={avatarSrc}
@@ -2269,7 +2498,7 @@ function AvatarPicker({
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
               Profile photo
             </p>
-            <div className="mt-3 grid grid-cols-5 gap-3">
+            <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-5 sm:gap-3">
             {PRESET_AVATARS.map((avatar) => {
               const active = avatar.src === avatarSrc;
               return (
@@ -2286,16 +2515,16 @@ function AvatarPicker({
                   <img
                     src={avatar.src}
                     alt={avatar.label}
-                    className="h-12 w-12 rounded-xl object-cover"
+                    className="h-11 w-11 rounded-xl object-cover sm:h-12 sm:w-12"
                   />
                 </button>
               );
             })}
             <label
-              className="flex h-[60px] w-[60px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-violet-300 text-violet-600 transition hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-950/30"
+              className="flex h-11 w-11 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-violet-300 text-violet-600 transition hover:bg-violet-50 sm:h-[60px] sm:w-[60px] sm:rounded-2xl dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-950/30"
             >
-              <span className="text-2xl leading-none">+</span>
-              <span className="mt-1 text-[10px] font-medium">Upload</span>
+              <span className="text-lg leading-none sm:text-2xl">+</span>
+              <span className="mt-0.5 text-[8px] font-medium sm:mt-1 sm:text-[10px]">Upload</span>
               <input
                 type="file"
                 accept="image/*"
@@ -2332,7 +2561,7 @@ const SectionCard = forwardRef(function SectionCard(
       ref={ref}
       layout
       className={
-        "relative min-w-0 overflow-hidden border rounded-xl md:rounded-2xl shadow-sm p-3 sm:p-4 md:p-5 backdrop-blur-sm " +
+        "relative w-full min-w-0 max-w-full overflow-hidden border rounded-xl md:rounded-2xl shadow-sm p-3 sm:p-4 md:p-5 backdrop-blur-sm " +
         theme.card +
         " transition-colors duration-300 " +
         (highlight
@@ -2416,6 +2645,7 @@ function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
   const [nowTick, setNowTick] = useState(Date.now());
   const [formOpen, setFormOpen] = useState(false);
   const taskInputRef = useRef(null);
+  const taskEditorOpenRef = useRef(false);
 
   const resetTaskForm = () => {
     setText("");
@@ -2453,6 +2683,24 @@ function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
     [nowTick],
   );
 
+  const isReminderActive = useCallback(
+    (t) => {
+      if (!t || !t.due || !t.time || t.done) return false;
+      const remindMins = Number(t.remindMins) || 0;
+      if (remindMins <= 0) return false;
+      const dueMs = new Date(`${t.due}T${t.time}:00`).getTime();
+      if (Number.isNaN(dueMs)) return false;
+      const remindAt = dueMs - remindMins * 60 * 1000;
+      return nowTick >= remindAt && nowTick < dueMs;
+    },
+    [nowTick],
+  );
+
+  const isDueToday = useCallback(
+    (t) => !t?.done && t?.due === todayKey(),
+    [],
+  );
+
   // Missed: has date+time, they passed (with grace), not done and not started
   const GRACE_MIN = 5;
   const isMissed = useCallback(
@@ -2466,7 +2714,9 @@ function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
   );
 
   useEffect(() => {
-    const refresh = () => setNowTick(Date.now());
+    const refresh = () => {
+      if (!taskEditorOpenRef.current) setNowTick(Date.now());
+    };
     const id = setInterval(refresh, 10 * 1000);
     const onFocus = () => refresh();
     const onVisibility = () => refresh();
@@ -2521,7 +2771,17 @@ function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
     if (Number(remind) > 0) ensurePermission();
   };
 
-  const remove = (id) => setTodos(todos.filter((t) => t.id !== id));
+  const remove = (id) => {
+    const todo = todos.find((item) => item.id === id);
+    if (!todo) return;
+    if (!window.confirm(`Delete "${todo.title}"?`)) return;
+    setTodos((current) => current.filter((item) => item.id !== id));
+    showUndoToast("Task deleted", () => {
+      setTodos((current) =>
+        current.some((item) => item.id === todo.id) ? current : [todo, ...current],
+      );
+    });
+  };
   const update = (id, patch) =>
     setTodos(todos.map((t) => (t.id === id ? { ...t, ...patch } : t)));
 
@@ -2545,9 +2805,15 @@ function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
       const adn = isDueNow(a),
         bdn = isDueNow(b);
       if (adn !== bdn) return adn ? -1 : 1;
+      const arn = isReminderActive(a),
+        brn = isReminderActive(b);
+      if (arn !== brn) return arn ? -1 : 1;
       const am = isMissed(a),
         bm = isMissed(b);
       if (am !== bm) return am ? -1 : 1; // keep Missed on top
+      const atd = isDueToday(a),
+        btd = isDueToday(b);
+      if (atd !== btd) return atd ? -1 : 1;
       const ao = isOverdue(a.due),
         bo = isOverdue(b.due);
       if (ao !== bo) return ao ? -1 : 1;
@@ -2560,7 +2826,7 @@ function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
     .filter(match);
 
   return (
-    <div className="min-w-0">
+    <div className="w-full min-w-0 max-w-full">
       <div>
         {/* The task composer stays out of the way until it is needed. */}
         <div className="mb-3">
@@ -2586,7 +2852,7 @@ function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
                 <option value="low">Low priority</option>
               </select>
             </div>
-            <div className="flex items-center gap-1 overflow-x-auto text-sm">
+            <div className="flex w-full items-center gap-1 overflow-x-auto text-sm sm:w-auto">
               {[
                 ["all", "All"],
                 ["today", "Today"],
@@ -2654,27 +2920,25 @@ function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
               className="h-9 shrink-0 basis-[110px] rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
             />
 
-            {/* Estimate + help */}
-            <div className="flex items-center gap-1">
-              <input
-                type="number"
-                min={5}
-                max={120}
-                step={5}
-                value={estimate}
-                onChange={(e) => setEstimate(e.target.value)}
-                placeholder="Est"
-                title="Estimate (minutes)"
-                className="h-9 shrink-0 w-[74px] rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
-              />
-              <HelpTip label="Estimate help">
-                <p className="mb-1 font-semibold">Estimate (minutes)</p>
-                <p>
-                  Planned time for this task. When you press <b>Start</b> on
-                  this task, the session will use this value.
-                </p>
-              </HelpTip>
-            </div>
+            <select
+              value={estimate}
+              onChange={(e) => setEstimate(e.target.value)}
+              title="Task duration"
+              aria-label="Task duration"
+              className="h-9 shrink-0 basis-[132px] rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
+            >
+              <option value="">Duration</option>
+              <option value="5">5 min</option>
+              <option value="10">10 min</option>
+              <option value="15">15 min</option>
+              <option value="20">20 min</option>
+              <option value="25">25 min</option>
+              <option value="30">30 min</option>
+              <option value="45">45 min</option>
+              <option value="60">1 hour</option>
+              <option value="90">1.5 hours</option>
+              <option value="120">2 hours</option>
+            </select>
 
             {/* Remind — a bit wider so “before” is fully visible */}
             <select
@@ -2710,7 +2974,7 @@ function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
         </div>
 
         {rawTodo.length === 0 && view !== "done" ? (
-          <div className="flex min-h-[260px] flex-col items-center justify-center px-4 py-16 text-center">
+          <div className="flex min-h-[180px] w-full max-w-full flex-col items-center justify-center px-4 py-10 text-center sm:min-h-[260px] sm:py-16">
             <div className="text-5xl" aria-hidden="true">
               📋
             </div>
@@ -2720,21 +2984,13 @@ function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
             <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
               Add your first task and get started!
             </p>
-            <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-              <button
-                type="button"
-                onClick={openTaskForm}
-                className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 dark:bg-violet-400 dark:text-slate-950 dark:hover:bg-violet-300"
-              >
-                + Add task
-              </button>
-              <button
-                type="button"
-                className={`rounded-xl border px-4 py-2 text-sm font-medium ${theme.secondaryButton}`}
-              >
-                Learn how
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={openTaskForm}
+              className="mt-6 rounded-xl border border-violet-200 bg-white px-4 py-2 text-sm font-medium text-violet-600 hover:bg-violet-50 dark:border-violet-800 dark:bg-slate-900 dark:text-violet-300 dark:hover:bg-violet-950/40"
+            >
+              + Add task
+            </button>
           </div>
         ) : (
           <Column
@@ -2743,12 +2999,15 @@ function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
             onRemove={remove}
             onUpdate={update}
             isDueNow={isDueNow}
+            isReminderActive={isReminderActive}
+            isDueToday={isDueToday}
             isOverdue={isOverdue}
             isToday={isToday}
             isMissed={isMissed}
             onStartTask={onStartTask}
             onStopTask={onStopTask}
             activeTodoId={activeTodoId}
+            taskEditorOpenRef={taskEditorOpenRef}
             scrollMax={300}
             showFade={false}
             emptyMessage={
@@ -2769,10 +3028,13 @@ function Column({
   onRemove,
   onUpdate,
   isDueNow,
+  isReminderActive,
+  isDueToday,
   isMissed,
   onStartTask,
   onStopTask,
   activeTodoId,
+  taskEditorOpenRef,
   scrollMax = 180,
   showFade = true,
   emptyMessage = "Nothing here yet ✨",
@@ -2794,7 +3056,10 @@ function Column({
 
     const inProgress = activeTodoId === item.id && !item.done;
     const dueNow = !inProgress && isDueNow(item);
+    const reminderActive = !inProgress && isReminderActive(item);
+    const dueToday = !inProgress && isDueToday(item);
     const missed = !inProgress && isMissed(item);
+    const needsAttention = dueNow || reminderActive || dueToday;
 
     const save = () => {
       onUpdate?.(item.id, {
@@ -2805,6 +3070,7 @@ function Column({
         remindMins: Number(remindV) || 0,
         estimateMins: estimateV ? Number(estimateV) : null,
       });
+      taskEditorOpenRef.current = false;
       setEditing(false);
     };
 
@@ -2836,14 +3102,17 @@ function Column({
           (dueNow
             ? "bg-amber-50/70 dark:bg-amber-950/20 "
             : "") +
+          (needsAttention
+            ? "border-amber-300 bg-amber-50/70 shadow-[inset_3px_0_0_rgb(245_158_11)] dark:border-amber-800 dark:bg-amber-950/20 "
+            : "") +
           (missed
-            ? "bg-rose-50/70 dark:bg-rose-950/20 "
+            ? "border-rose-300 bg-rose-50/70 shadow-[inset_3px_0_0_rgb(244_63_94)] dark:border-rose-800 dark:bg-rose-950/20 "
             : "")
         }
       >
         {!editing ? (
           <>
-          <div className="grid w-full max-w-[710px] grid-cols-[minmax(240px,1fr)_68px_72px_repeat(7,26px)] items-center gap-2">
+          <div className="grid w-full max-w-[710px] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 2xl:grid-cols-[minmax(180px,1fr)_60px_72px_minmax(150px,1fr)] 2xl:gap-2 2xl:pr-32">
             <span
               className={
                 "truncate font-medium " +
@@ -2853,7 +3122,7 @@ function Column({
             >
               {item.title}
             </span>
-            <span className={`justify-self-center rounded-full px-3 py-1 text-xs font-medium ${priorityClass}`}>
+            <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-medium 2xl:justify-self-center ${priorityClass}`}>
               {item.priority === "high"
                 ? "High"
                 : item.priority === "low"
@@ -2861,13 +3130,29 @@ function Column({
                   : "Med"}
             </span>
             {inProgress ? (
-              <span className="justify-self-center rounded-full bg-violet-100 px-2 py-1 text-[10px] font-semibold text-violet-700 dark:bg-violet-900/60 dark:text-violet-200">
+              <span className="hidden justify-self-center rounded-full bg-violet-100 px-2 py-1 text-[10px] font-semibold text-violet-700 2xl:inline-flex dark:bg-violet-900/60 dark:text-violet-200">
                 In focus
               </span>
+            ) : missed ? (
+              <span className="hidden justify-self-center rounded-full bg-rose-100 px-2 py-1 text-[10px] font-semibold text-rose-700 2xl:inline-flex dark:bg-rose-950/60 dark:text-rose-200">
+                Overdue
+              </span>
+            ) : dueNow ? (
+              <span className="hidden justify-self-center rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700 2xl:inline-flex dark:bg-amber-950/60 dark:text-amber-200">
+                Due now
+              </span>
+            ) : reminderActive ? (
+              <span className="hidden justify-self-center rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700 2xl:inline-flex dark:bg-amber-950/60 dark:text-amber-200">
+                Due soon
+              </span>
+            ) : dueToday ? (
+              <span className="hidden justify-self-center rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700 2xl:inline-flex dark:bg-amber-950/60 dark:text-amber-200">
+                Due today
+              </span>
             ) : (
-              <span aria-hidden="true" />
+              <span aria-hidden="true" className="hidden 2xl:block" />
             )}
-            <span className="col-span-7 hidden min-w-0 justify-self-center items-center gap-2 truncate text-sm font-medium text-slate-600 sm:inline-flex dark:text-slate-300">
+            <span className="col-span-2 inline-flex min-w-0 justify-self-start items-center gap-2 truncate text-sm font-medium text-slate-600 2xl:col-span-1 dark:text-slate-300">
               <svg
                 aria-hidden="true"
                 viewBox="0 0 24 24"
@@ -2890,7 +3175,7 @@ function Column({
               )}
             </span>
           </div>
-          <div className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-3">
+          <div className="mt-2 flex items-center justify-end gap-3 2xl:absolute 2xl:right-3 2xl:top-1/2 2xl:mt-0 2xl:-translate-y-1/2">
             {!item.done && (
               <button
                 onClick={() => {
@@ -2910,7 +3195,10 @@ function Column({
             )}
             <button
               type="button"
-              onClick={() => setEditing(true)}
+              onClick={() => {
+                taskEditorOpenRef.current = true;
+                setEditing(true);
+              }}
               className={`flex h-8 w-8 items-center justify-center rounded-lg border text-sm ${theme.secondaryButton}`}
               title="Edit task"
               aria-label={`Edit ${item.title}`}
@@ -2960,26 +3248,24 @@ function Column({
               className="h-9 shrink-0 w-[110px] rounded-lg border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
             />
 
-            {/* Estimate + help (NEW) */}
-            <div className="flex items-center gap-1">
-              <input
-                type="number"
-                min={5}
-                max={120}
-                step={5}
-                value={estimateV}
-                onChange={(e) => setEstimateV(e.target.value)}
-                placeholder="Est"
-                className="h-9 shrink-0 w-[74px] rounded-lg border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
-              />
-              <HelpTip label="Estimate help">
-                <p className="mb-1 font-semibold">Estimate (minutes)</p>
-                <p>
-                  Planned time for this task. When you press <b>Start</b> on
-                  this task, the session will use this value.
-                </p>
-              </HelpTip>
-            </div>
+            <select
+              value={estimateV}
+              onChange={(e) => setEstimateV(e.target.value)}
+              aria-label="Task duration"
+              className="h-9 shrink-0 w-[132px] rounded-lg border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
+            >
+              <option value="">Duration</option>
+              <option value="5">5 min</option>
+              <option value="10">10 min</option>
+              <option value="15">15 min</option>
+              <option value="20">20 min</option>
+              <option value="25">25 min</option>
+              <option value="30">30 min</option>
+              <option value="45">45 min</option>
+              <option value="60">1 hour</option>
+              <option value="90">1.5 hours</option>
+              <option value="120">2 hours</option>
+            </select>
 
             <select
               value={remindV}
@@ -3003,7 +3289,10 @@ function Column({
                 Save
               </button>
               <button
-                onClick={() => setEditing(false)}
+                onClick={() => {
+                  taskEditorOpenRef.current = false;
+                  setEditing(false);
+                }}
                 className={`h-9 px-3 rounded-lg border ${theme.secondaryButton}`}
               >
                 Cancel
@@ -3244,6 +3533,8 @@ function Pomodoro({
         mins: pomo.minutes,
         at: Date.now(),
         name: baseName(sessionTaskLabel || currentTask),
+        habitId: sessionHabitId || null,
+        todoId: sessionTodoId || null,
         sourceType: sessionHabitId
           ? "habit"
           : sessionTodoId
@@ -3254,7 +3545,7 @@ function Pomodoro({
       setPomo({ ...pomo, sessions, history: newHistory });
 
       if (sessionHabitId && typeof onHabitAutoDone === "function") {
-        onHabitAutoDone(sessionHabitId);
+        onHabitAutoDone(sessionHabitId, pomo.minutes);
       }
       if (sessionTodoId && typeof onTodoAutoDone === "function") {
         onTodoAutoDone(sessionTodoId);
@@ -3268,11 +3559,7 @@ function Pomodoro({
       playMelodyByName(ensureAudioContext(), melody, volume);
       if ("vibrate" in navigator) navigator.vibrate([200, 80, 200]);
       confetti({ particleCount: 120, spread: 70, origin: { y: 0.6 } });
-      showPomodoroCompleteToast({
-        task: baseName(sessionTaskLabel || currentTask),
-        minutes: pomo.minutes,
-        sessions,
-      });
+      showPomodoroCompleteToast();
       notify("Pomodoro complete", {
         body: "Take a short break.",
         silent: true,
@@ -3433,7 +3720,7 @@ function Pomodoro({
   ]);
 
   return (
-    <div className="space-y-2 px-2 py-1 sm:px-3">
+    <div className="space-y-1 px-2 py-1 sm:px-3">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-100">
           Pomodoro
@@ -3443,7 +3730,7 @@ function Pomodoro({
         </span>
       </div>
       <div className="flex justify-center">
-        <div className="relative h-[230px] w-[230px] sm:h-[252px] sm:w-[252px]">
+        <div className="relative h-[200px] w-[200px] sm:h-[252px] sm:w-[252px]">
           <svg
             className="h-full w-full -rotate-90 drop-shadow-[0_10px_20px_rgba(124,58,237,0.14)]"
             viewBox="0 0 236 236"
@@ -3476,7 +3763,7 @@ function Pomodoro({
             <span className="rounded-md bg-violet-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-violet-600 dark:bg-violet-950/50 dark:text-violet-300">
               Focus time
             </span>
-            <span className="mt-3 text-5xl font-bold tabular-nums tracking-tight text-slate-900 dark:text-slate-100 sm:text-6xl">
+            <span className="mt-2 text-4xl font-bold tabular-nums tracking-tight text-slate-900 dark:text-slate-100 sm:mt-3 sm:text-6xl">
               {mm}:{ss}
             </span>
             <button
@@ -3509,25 +3796,26 @@ function Pomodoro({
                   return next;
                 });
               }}
-              className="mt-5 min-w-28 rounded-full bg-gradient-to-r from-violet-600 to-indigo-600 px-5 py-2 text-xs font-semibold text-white shadow-[0_14px_30px_rgba(124,58,237,0.38)] transition hover:from-violet-500 hover:to-indigo-500 focus:outline-none focus:ring-2 focus:ring-violet-400 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
+              className="mt-3 min-w-28 rounded-full bg-gradient-to-r from-violet-600 to-indigo-600 px-5 py-2 text-xs font-semibold text-white shadow-[0_14px_30px_rgba(124,58,237,0.38)] transition hover:from-violet-500 hover:to-indigo-500 focus:outline-none focus:ring-2 focus:ring-violet-400 focus:ring-offset-2 dark:focus:ring-offset-slate-900 sm:mt-5"
             >
               {running ? "Ⅱ Pause" : "▶ Start"}
             </button>
           </div>
         </div>
       </div>
-      {(sessionTaskLabel || currentTask) && (
-        <div className="mx-auto max-w-sm rounded-2xl border border-violet-200/80 bg-violet-50/70 px-4 py-3 dark:border-violet-900/70 dark:bg-violet-950/30">
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            Working on
-          </p>
-          <p className="mt-1 truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
+      <div
+        className={`mx-auto flex h-8 max-w-[240px] items-center rounded-xl border border-violet-200/80 bg-violet-50/70 px-3 dark:border-violet-900/70 dark:bg-violet-950/30 ${
+          sessionTaskLabel || currentTask ? "" : "invisible"
+        }`}
+        aria-hidden={!(sessionTaskLabel || currentTask)}
+      >
+          <p className="truncate text-xs font-semibold text-slate-800 dark:text-slate-100">
+            <span className="font-normal text-slate-500 dark:text-slate-400">Working on: </span>
             {sessionTaskLabel || currentTask}
           </p>
-        </div>
-      )}
+      </div>
 
-      <div className="mx-auto flex w-full max-w-md items-center justify-between gap-3 text-sm">
+      <div className="mx-auto flex w-full max-w-md items-center justify-between gap-2 text-sm sm:gap-3">
         <button
           onClick={() => inc(-5)}
           className={`h-9 shrink-0 rounded-lg border px-3 text-xs font-medium ${theme.secondaryButton}`}
@@ -3641,20 +3929,25 @@ function Habits({
         const isToday = h.lastDone === day;
 
         if (isToday) {
-          return { ...h, lastDone: "" };
+          return uncompleteHabit(h, day);
         }
 
-        const isNewDay = h.lastDone !== day;
-        return {
-          ...h,
-          streak: isNewDay ? h.streak + 1 : h.streak,
-          lastDone: day,
-        };
+        return completeHabit(h, { day, mins: h.mins, source: "manual" });
       }),
     );
   };
 
-  const remove = (id) => setHabits(habits.filter((h) => h.id !== id));
+  const remove = (id) => {
+    const habit = habits.find((item) => item.id === id);
+    if (!habit) return;
+    if (!window.confirm(`Delete "${habit.name}"?`)) return;
+    setHabits((current) => current.filter((item) => item.id !== id));
+    showUndoToast("Habit deleted", () => {
+      setHabits((current) =>
+        current.some((item) => item.id === habit.id) ? current : [habit, ...current],
+      );
+    });
+  };
   const startEdit = (habit) => {
     setEditingHabitId(habit.id);
     setEditName(habit.name);
@@ -3673,6 +3966,9 @@ function Habits({
     setEditingHabitId(null);
   };
   const todayColumn = (new Date().getDay() + 6) % 7;
+  const weekStart = new Date();
+  weekStart.setHours(0, 0, 0, 0);
+  weekStart.setDate(weekStart.getDate() - todayColumn);
   const completedToday = habits.filter((h) => h.lastDone === todayKey()).length;
   const habitIconStyles = [
     "bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300",
@@ -3685,7 +3981,14 @@ function Habits({
     if (!name.trim()) return;
     const m = Math.max(5, Math.min(60, Number(mins) || 15));
     setHabits([
-      { id: uid(), name: name.trim(), mins: m, streak: 0, lastDone: "" },
+      {
+        id: uid(),
+        name: name.trim(),
+        mins: m,
+        streak: 0,
+        lastDone: "",
+        completedDays: [],
+      },
       ...habits,
     ]);
     setName("");
@@ -3730,15 +4033,22 @@ function Habits({
                      focus:outline-none focus:ring-2 focus:ring-slate-300
                      dark:bg-slate-900 dark:border-slate-700 dark:text-slate-100 dark:placeholder:text-slate-400"
         />
-        <input
-          type="number"
-          min={5}
-          max={60}
+        <select
           value={mins}
-          onChange={(e) => setMins(parseInt(e.target.value || "0", 10))}
-          className="w-20 rounded-xl border px-3 py-2 text-center dark:bg-slate-900 dark:border-slate-700"
-          title="Minutes"
-        />
+          onChange={(e) => setMins(Number(e.target.value))}
+          className="rounded-xl border px-3 py-2 dark:bg-slate-900 dark:border-slate-700"
+          title="Habit duration"
+          aria-label="Habit duration"
+        >
+          <option value="5">5 min</option>
+          <option value="10">10 min</option>
+          <option value="15">15 min</option>
+          <option value="20">20 min</option>
+          <option value="25">25 min</option>
+          <option value="30">30 min</option>
+          <option value="45">45 min</option>
+          <option value="60">1 hour</option>
+        </select>
         <button
           className={`px-3 py-2 rounded-xl ${theme.primaryButton}`}
           onClick={add}
@@ -3747,12 +4057,8 @@ function Habits({
         </button>
       </div>
 
-      {/* Scroll list */}
-      <div
-        className={`mt-3 pr-2 overflow-y-auto custom-scroll ${habits.length > 5 ? "max-h-[340px]" : ""}`}
-      >
-        {habits.length > 0 && (
-          <div className="mb-2 ml-3 grid w-full max-w-[710px] grid-cols-[minmax(240px,1fr)_68px_72px_repeat(7,26px)] items-center gap-2 text-xs font-semibold text-slate-400 dark:text-slate-500">
+      {habits.length > 0 && (
+        <div className="mt-3 mb-2 ml-3 hidden w-full max-w-[710px] grid-cols-[minmax(240px,1fr)_68px_72px_repeat(7,26px)] items-center gap-2 text-xs font-semibold text-slate-400 2xl:grid dark:text-slate-500">
             <span />
             <span />
             <span />
@@ -3761,16 +4067,25 @@ function Habits({
                 {day}
               </span>
             ))}
-          </div>
-        )}
+        </div>
+      )}
+
+      {/* Scroll list */}
+      <div
+        className={`pr-2 overflow-y-auto custom-scroll ${habits.length > 4 ? "max-h-[340px] 2xl:max-h-[220px]" : ""}`}
+      >
         <ul className={habits.length > 0 ? "space-y-1" : "space-y-2"}>
           {habits.map((h, habitIndex) => {
             const isDoneToday = h.lastDone === todayKey();
-            const activeDays = Math.min(
-              7,
-              Math.max(isDoneToday ? 1 : 0, h.streak || 0),
-            );
-            const firstActiveDay = Math.max(0, todayColumn - activeDays + 1);
+            const lastDoneDate = h.lastDone
+              ? new Date(`${h.lastDone}T00:00:00`)
+              : null;
+            const lastDoneColumn =
+              lastDoneDate && !Number.isNaN(lastDoneDate.getTime())
+                ? Math.round((lastDoneDate.getTime() - weekStart.getTime()) / 86400000)
+                : -1;
+            const activeDays = Math.min(7, Math.max(1, h.streak || 0));
+            const firstActiveDay = Math.max(0, lastDoneColumn - activeDays + 1);
             const habitIcon = inferTag(h.name)?.icon || "✦";
             return (
               <li
@@ -3791,15 +4106,21 @@ function Habits({
                       className="h-8 min-w-0 flex-1 rounded-lg border px-3 text-sm dark:border-slate-700 dark:bg-slate-900"
                       aria-label="Habit name"
                     />
-                    <input
-                      type="number"
-                      min={5}
-                      max={60}
+                    <select
                       value={editMins}
                       onChange={(event) => setEditMins(event.target.value)}
-                      className="h-8 w-16 rounded-lg border px-2 text-center text-sm dark:border-slate-700 dark:bg-slate-900"
-                      aria-label="Habit minutes"
-                    />
+                      className="h-8 rounded-lg border px-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+                      aria-label="Habit duration"
+                    >
+                      <option value="5">5 min</option>
+                      <option value="10">10 min</option>
+                      <option value="15">15 min</option>
+                      <option value="20">20 min</option>
+                      <option value="25">25 min</option>
+                      <option value="30">30 min</option>
+                      <option value="45">45 min</option>
+                      <option value="60">1 hour</option>
+                    </select>
                     <button
                       type="button"
                       onClick={saveEdit}
@@ -3817,7 +4138,7 @@ function Habits({
                   </div>
                 ) : (
                   <>
-                    <div className="grid w-full max-w-[710px] grid-cols-[minmax(240px,1fr)_68px_72px_repeat(7,26px)] items-center gap-2">
+                    <div className="grid w-full max-w-[710px] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 2xl:grid-cols-[minmax(240px,1fr)_68px_72px_repeat(7,26px)] 2xl:gap-2 2xl:pr-0">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 font-medium">
                           <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm ${habitIconStyles[habitIndex % habitIconStyles.length]}`}>
@@ -3831,11 +4152,14 @@ function Habits({
                         {h.mins} min
                         <span className="text-emerald-500" aria-label="minutes">♨</span>
                       </span>
-                      <span aria-hidden="true" />
+                      <span aria-hidden="true" className="hidden 2xl:block" />
                       {Array.from({ length: 7 }, (_, index) => {
                         const completed =
-                          index >= firstActiveDay && index <= todayColumn;
-                        const dotClass = `mx-auto h-3 w-3 rounded-full border transition ${
+                          lastDoneColumn >= 0 &&
+                          lastDoneColumn < 7 &&
+                          index >= firstActiveDay &&
+                          index <= lastDoneColumn;
+                        const dotClass = `hidden 2xl:block mx-auto h-3 w-3 rounded-full border transition ${
                           completed
                             ? "border-emerald-400 bg-emerald-400"
                             : "border-slate-300 dark:border-slate-600"
@@ -3856,7 +4180,7 @@ function Habits({
                       })}
                     </div>
 
-                    <div className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-3">
+                    <div className="mt-2 flex items-center justify-end gap-3 2xl:absolute 2xl:right-3 2xl:top-1/2 2xl:mt-0 2xl:-translate-y-1/2">
                       <button
                         type="button"
                         onClick={() => {
@@ -3898,7 +4222,7 @@ function Habits({
             );
           })}
           {habits.length === 0 && (
-            <li className="flex flex-col items-center justify-center px-4 py-8 text-center">
+            <li className="flex w-full max-w-full flex-col items-center justify-center px-4 py-8 text-center">
               <div className="text-5xl" aria-hidden="true">
                 🌱
               </div>
@@ -3987,13 +4311,24 @@ function inferTag(rawName) {
 }
 
 /* ===================== Daily Goal (timeline + badges) ===================== */
-function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
+function DailyGoal({
+  pomo,
+  habits,
+  avatarSrc,
+  profileName,
+  tourPreviewOpen = false,
+}) {
   const theme = uiTheme();
   const [goal, setGoal] = useState(load("ff.goalMins", 60));
   const [shareOpen, setShareOpen] = useState(false);
   const [sharePreviewUrl, setSharePreviewUrl] = useState("");
   const [sharePreviewLoading, setSharePreviewLoading] = useState(false);
+  const [expandedSessionId, setExpandedSessionId] = useState(null);
   useEffect(() => save("ff.goalMins", goal), [goal]);
+
+  useEffect(() => {
+    setShareOpen(tourPreviewOpen);
+  }, [tourPreviewOpen]);
 
   const [view, setView] = useState("today"); // "today" | "yesterday" | "last7"
 
@@ -4197,8 +4532,8 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
         </div>
       </div>
 
-      <div className="mt-2 flex items-center gap-3">
-        <div className="relative h-28 w-28 shrink-0">
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <div className="relative h-24 w-24 shrink-0 sm:h-28 sm:w-28">
           <svg
             className="h-full w-full -rotate-90"
             viewBox="0 0 112 112"
@@ -4226,13 +4561,13 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
               className="text-violet-500 transition-[stroke-dashoffset] duration-300 dark:text-violet-300"
             />
           </svg>
-          <span className="absolute inset-0 flex items-center justify-center text-2xl font-semibold">
+          <span className="absolute inset-0 flex items-center justify-center text-xl font-semibold sm:text-2xl">
             {displayPct}%
           </span>
         </div>
 
-        <div className="flex min-w-0 shrink-0 items-center divide-x divide-slate-200 text-sm dark:divide-slate-700">
-          <div className="min-w-0 pr-5">
+        <div className="flex min-w-0 flex-1 items-center divide-x divide-slate-200 text-sm 2xl:flex-none dark:divide-slate-700">
+          <div className="min-w-0 pr-3 sm:pr-5">
             <p className="text-slate-500 dark:text-slate-400">
               <strong className="text-base text-slate-900 dark:text-slate-100">
                 {displayMinutes}
@@ -4248,7 +4583,7 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
               </span>
             </p>
           </div>
-          <div className="min-w-0 pl-5">
+          <div className="min-w-0 pl-3 sm:pl-5">
             <p className="text-slate-500 dark:text-slate-400">
               <strong className="text-base text-slate-900 dark:text-slate-100">
                 {sessions.length}
@@ -4265,7 +4600,7 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
             </p>
           </div>
         </div>
-        <div className="shrink-0 translate-x-[108px] rounded-xl bg-violet-50 px-4 py-3 text-center text-sm font-medium text-violet-600 dark:bg-violet-950/35 dark:text-violet-300">
+        <div className="basis-full rounded-xl bg-violet-50 px-3 py-2 text-center text-xs font-medium text-violet-600 sm:px-4 sm:py-3 sm:text-sm 2xl:ml-[170px] 2xl:basis-auto dark:bg-violet-950/35 dark:text-violet-300">
           {displayPct > 0
             ? "✦  Great progress! Keep going 💪"
             : "✦  Set a goal and start your first focus session!"}
@@ -4310,7 +4645,7 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
       </details>
 
       {/* Timeline */}
-      <div className="relative mt-2 min-h-0 flex-1">
+      <div className="relative mt-2 h-36 shrink-0">
         <div className="absolute left-3 top-0 bottom-0 w-px bg-slate-200 dark:bg-slate-700" />
         <div className="h-full pl-8 overflow-y-auto custom-scroll space-y-2">
           {sessions.length === 0 ? (
@@ -4318,12 +4653,14 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
               No sessions here - start one ⏱️
             </div>
           ) : (
-            sessions.map((e) => {
+            sessions.map((e, index) => {
               const name =
                 e.name ||
                 e.source ||
                 (e.label ? String(e.label).split("•")[0].trim() : "") ||
                 "Pomodoro";
+              const sessionId = `${e.at || "session"}-${e.day}-${index}`;
+              const expanded = expandedSessionId === sessionId;
               const tag = inferTag(name);
               const sourceBadge = {
                 habit: { label: "Habit", icon: "♨", cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" },
@@ -4332,7 +4669,7 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
               }[e.sourceType || (name === "Pomodoro" ? "pomodoro" : "task")];
               return (
                 <div
-                  key={(e.at || Math.random()) + e.day}
+                  key={sessionId}
                   className="relative rounded-xl border border-slate-200 bg-slate-50 px-3 py-1 dark:bg-slate-900/60 dark:border-slate-700"
                 >
                   <div className="absolute -left-4 top-2.5 h-2 w-2 rounded-full bg-sky-400 ring-4 ring-sky-400/15" />
@@ -4352,7 +4689,23 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
                           {tag.label}
                         </span>
                       )}
-                      <div className="font-medium truncate">{name}</div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedSessionId((current) =>
+                            current === sessionId ? null : sessionId,
+                          )
+                        }
+                        className={`min-w-0 flex-1 text-left text-sm font-medium focus:outline-none focus:ring-2 focus:ring-violet-400 focus:ring-offset-1 dark:focus:ring-offset-slate-900 ${
+                          expanded
+                            ? "whitespace-normal break-words"
+                            : "truncate"
+                        }`}
+                        title={expanded ? "Hide full task name" : "Show full task name"}
+                        aria-expanded={expanded}
+                      >
+                        {name}
+                      </button>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <span className="text-xs text-slate-500 dark:text-slate-400">
@@ -4399,7 +4752,7 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
               ) : sharePreviewUrl ? (
                 <img
                   src={sharePreviewUrl}
-                  alt="FocusFlow achievement card preview"
+                  alt="FocusPlanner achievement card preview"
                   className="max-h-[52vh] w-auto rounded-xl shadow-lg"
                 />
               ) : (
@@ -4433,40 +4786,50 @@ function DailyGoal({ pomo, habits, avatarSrc, profileName }) {
   );
 }
 
+/* ===================== Weekly Insights ===================== */
+function WeeklyInsights({ pomo, todos = [], habits = [] }) {
+  const summary = useMemo(() => {
+    const activity = buildWeeklyActivity({ pomo, todos, habits });
+    return weeklySummary(activity, habits);
+  }, [habits, pomo, todos]);
+
+  const cards = [
+    ["Focus time", `${summary.focusMinutes} min`, "◷"],
+    ["Tasks completed", summary.completedTasks, "✓"],
+    ["Habits completed", summary.completedHabits, "♨"],
+    ["Best day", `${summary.bestDay.label} · ${summary.bestDay.mins} min`, "✦"],
+    ["Longest streak", `${summary.longestStreak} days`, "↗"],
+  ];
+
+  return (
+    <div>
+      <h2 className="text-lg font-semibold tracking-tight">Week at a glance</h2>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {cards.map(([label, value, icon]) => (
+          <div
+            key={label}
+            className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-900/60"
+          >
+            <span className="text-violet-600 dark:text-violet-300" aria-hidden="true">
+              {icon}
+            </span>
+            <p className="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+              {label}
+            </p>
+            <p className="mt-1 text-xl font-bold tracking-tight">{value}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ===================== Weekly Chart ===================== */
-function WeeklyChart({ pomo, todos = [] }) {
-  const localDateKey = (date) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
-  };
-  const data = useMemo(() => {
-    const now = new Date();
-    const weekStart = new Date(now);
-    const mondayOffset = (now.getDay() + 6) % 7;
-    weekStart.setDate(now.getDate() - mondayOffset);
-    const days = Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(weekStart);
-      d.setDate(weekStart.getDate() + i);
-      return {
-        key: localDateKey(d),
-        label: d.toLocaleDateString(undefined, { weekday: "short" }),
-        date: d.getDate(),
-        mins: 0,
-        tasks: 0,
-      };
-    });
-    (pomo.history ?? []).forEach((e) => {
-      const idx = days.findIndex((d) => d.key === e.day);
-      if (idx >= 0) days[idx].mins += e.mins;
-    });
-    (todos ?? []).forEach((todo) => {
-      const idx = days.findIndex((d) => d.key === todo.due);
-      if (idx >= 0) days[idx].tasks += 1;
-    });
-    return days;
-  }, [pomo.history, todos]);
+function WeeklyChart({ pomo, todos = [], habits = [] }) {
+  const data = useMemo(
+    () => buildWeeklyActivity({ pomo, todos, habits }),
+    [habits, pomo, todos],
+  );
   const maxMinutes = Math.max(
     1,
     ...data.map((day) => day.mins),
@@ -4474,45 +4837,54 @@ function WeeklyChart({ pomo, todos = [] }) {
   const currentDay = todayKey();
 
   return (
-    <div className="space-y-3">
-      <h2 className="text-lg font-semibold tracking-tight">This Week</h2>
-      <div className="grid min-w-0 grid-cols-7 divide-x divide-slate-200/80 dark:divide-slate-700/80">
+    <div className="space-y-2">
+      <h2 className="text-base font-semibold tracking-tight">This Week</h2>
+      <div className="overflow-x-auto pb-1 custom-scroll">
+      <div className="grid grid-cols-7 divide-x divide-slate-200/80 sm:min-w-[560px] dark:divide-slate-700/80">
           {data.map((day) => {
             const active = day.key === currentDay;
             const value = day.mins;
             const barHeight = Math.max(
               6,
-              Math.round((value / maxMinutes) * 38),
+              Math.round((value / maxMinutes) * 28),
             );
             return (
               <div
                 key={day.key}
-                className={`mx-1 flex min-w-0 flex-col items-center rounded-xl px-1 py-2 text-center sm:px-2 ${
+                className={`mx-0.5 flex min-w-0 flex-col items-center rounded-xl px-0.5 py-1.5 text-center sm:mx-1 sm:px-2 ${
                   active
                     ? "border border-violet-300 bg-[radial-gradient(ellipse_at_50%_62%,rgba(196,181,253,0.46)_0%,rgba(237,233,254,0.34)_48%,transparent_84%)] shadow-[0_12px_28px_rgba(124,58,237,0.16)] dark:border-violet-500/70 dark:bg-[radial-gradient(ellipse_at_50%_62%,rgba(124,58,237,0.38)_0%,rgba(49,46,129,0.22)_55%,transparent_84%)]"
                     : ""
                 }`}
               >
                 <span
-                  className={`text-sm font-medium ${active ? "text-violet-700 dark:text-violet-300" : "text-slate-500 dark:text-slate-400"}`}
+                  className={`min-w-0 truncate text-[9px] font-medium sm:text-xs ${active ? "text-violet-700 dark:text-violet-300" : "text-slate-500 dark:text-slate-400"}`}
                 >
                   {day.label} {day.date}
                 </span>
-                <span className="mt-2.5 text-xs font-medium text-slate-700 dark:text-slate-300">
+                <span className="mt-1 whitespace-nowrap text-[9px] font-medium text-slate-700 sm:text-[11px] dark:text-slate-300">
                   {day.mins} min
                 </span>
-                <div className="mt-2 flex h-10 items-end justify-center">
+                <div className="mt-1 flex h-7 items-end justify-center">
                   <div
-                    className="w-11 rounded-t-md bg-gradient-to-t from-violet-500 to-violet-300 transition-all dark:from-violet-500 dark:to-violet-300 sm:w-14"
+                    className="w-6 rounded-t-md bg-gradient-to-t from-violet-500 to-violet-300 transition-all dark:from-violet-500 dark:to-violet-300 sm:w-14"
                     style={{ height: `${barHeight}px` }}
                   />
                 </div>
-                <span className="mt-2 text-xs text-slate-400 dark:text-slate-500">
-                  {day.tasks} task{day.tasks === 1 ? "" : "s"}
+                <span className="mt-1 text-[9px] leading-tight text-slate-400 sm:text-[11px] dark:text-slate-500">
+                  {day.tasks > 0 && (
+                    <>{day.tasks} task{day.tasks === 1 ? "" : "s"}</>
+                  )}
+                  {day.tasks > 0 && day.habits > 0 && " · "}
+                  {day.habits > 0 && (
+                    <>{day.habits} habit{day.habits === 1 ? "" : "s"}</>
+                  )}
+                  {day.tasks === 0 && day.habits === 0 && "0 items"}
                 </span>
               </div>
             );
           })}
+      </div>
       </div>
     </div>
   );
