@@ -1,244 +1,89 @@
 # FocusPlanner
 
-Tiny productivity app that combines a **Pomodoro timer**, **mini-kanban tasks**, and **habits** - with browser notifications and a daily goal. Works fully in the browser and stores data locally.
+FocusPlanner is a private, browser-first workspace for planning tasks, building habits, and completing focused Pomodoro sessions.
 
-> Live demo (GitHub Pages): `https://viktoriyari.github.io/FocusPlanner/`
-> _(Vite `base` is set to `/FocusPlanner/` - see Deploy section.)_
-
----
-
-## Features
-
-- **Tasks (Mini-Kanban)**
-
-  - Title, Priority (High/Med/Low), Date, Time, **Remind (before)**, **Estimate (minutes)**
-  - Search & Filters: All / High / Med / Low / Today / Overdue / Missed
-  - Smart badges: `Today`, `Overdue`, `Missed`, `⏱ Xm`, `High/Med/Low`
-  - Auto-priority boost to **High** when a task becomes **Missed** (one-time)
-  - Keyboard fix: inputs now accept **Space** (no hotkey collisions)
-
-- **Pomodoro**
-
-  - 5–60 minutes, Start / Pause / Reset
-  - Finish celebration: melody, vibration (if supported), confetti, toasts
-  - **Hotkeys**: `Space` (start/pause), `R` (reset) - ignored while typing
-  - Melodies (Victory/Chill/Arcade/Bells/Sunrise) + volume with **Test** button
-
-- **Habits & Streaks**
-
-  - Create habit with minutes, **Start** launches Pomodoro for that duration
-  - **Done today** button, streak counter
-  - **Auto mark Done today** when a Pomodoro started from a habit finishes
-  - Today’s done habits are **highlighted** (green ✓)
-
-- **Daily Goal & Weekly Chart**
-
-  - Adjustable daily goal with progress bar
-  - Sessions timeline: Today / Yesterday / Last 7
-  - Weekly line chart of minutes (Recharts)
-
-- **Notifications & Reminders**
-
-  - Browser **Notifications** (HTTPS or localhost) + vibration + sound
-  - Task **Remind** sends notification _before_ the deadline (select shows full “before”)
-
-- **Data**
-
-  - Everything is stored locally (`localStorage`)
-  - **Export/Import** JSON backup, **Reset** for full wipe
-
-- **UI/UX tweaks**
-  - Wider **Remind** selects (full word “before” visible)
-  - **? Help** tooltip next to **Estimate** with a short explanation
-  - Date input wide enough to show the **year**
-  - Spacing adjustments in the Done section for cleaner alignment
+**Live demo:** [viktoriyari.github.io/FocusPlanner](https://viktoriyari.github.io/FocusPlanner/)
 
 ---
 
-## Quick Start (local)
+## What You Can Do
+
+- Plan tasks with priority, due date, time, reminder, and estimated duration.
+- Start a Pomodoro session from a task or habit, then pause, restart, or adjust its length.
+- Track daily habits, completion history, and streaks.
+- See focus minutes, sessions, completed items, and weekly activity in one dashboard.
+- Share a Daily Goal achievement card with friends.
+- Personalize the app with a profile name, avatar, and theme.
+- Follow the built-in onboarding tour on a fresh install.
+- Receive task reminders and Pomodoro notifications when your browser or mobile device supports them.
+
+---
+
+## Run Locally
 
 ```bash
-# install
-npm i
-
-# run locally
+npm install
 npm run dev
+```
 
-# build
+Open the local address shown by Vite, normally `http://localhost:5173/FocusPlanner/`.
+
+## Quality Checks
+
+```bash
+npm test
+npm run lint
 npm run build
-
-# preview build
-npm run preview
+npm run build:mobile
 ```
 
-**Enable Notifications**: click the button in the header and allow in the browser (works only on **HTTPS** or **localhost**).
+## Privacy
+
+FocusPlanner has no accounts, analytics, or backend. Your tasks, habits, settings, and history stay in your browser's `localStorage`.
+
+Use the reset control in the header to clear local app data. Browser data may also be cleared from your browser settings.
 
 ---
 
-## Export / Import / Reset
+## Deployment
 
-- **Export**: saves a `.json` backup (tasks, habits, pomodoro history, settings)
-- **Import**: load a previous backup and refresh the page
-- **Reset**: clears all local data (use carefully)
+The project is published with GitHub Pages from the `main` branch. Vite uses `/FocusPlanner/` as the production base path, which matches the repository name.
 
----
+After pushing to `main`, GitHub Actions creates a new deployment at:
 
-## Keyboard Shortcuts
-
-- `Space` - Start/Pause Pomodoro
-- `R` - Reset Pomodoro  
-  _(Hotkeys are disabled while you’re typing in inputs.)_
-
----
-
-## Development Notes (React + Vite)
-
-This project uses **React + Vite**. Vite provides super fast dev server (HMR) and lean builds.
-
-Two official React plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) - uses **Babel** for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) - uses **SWC** for Fast Refresh
-
-### ESLint & TypeScript (recommended)
-
-If you’re building a production app, consider TypeScript with type-aware lint rules. See the Vite TS template and [`typescript-eslint`](https://typescript-eslint.io).
-
----
-
-## Build & Deploy (GitHub Pages)
-
-### 1) Set `base` in `vite.config.js`
-
-**Project page** (`https://viktoriyari.github.io/FocusPlanner/`):
-
-```js
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-
-export default defineConfig({
-  plugins: [react()],
-  base: "/FocusPlanner/", // 👈 repo name
-});
+```text
+https://viktoriyari.github.io/FocusPlanner/
 ```
-
-**User/Org page** (`https://username.github.io/`):
-
-```js
-export default defineConfig({
-  plugins: [react()],
-  base: "/", // 👈 root
-});
-```
-
-### 2) Public icons (safe paths)
-
-Use relative paths so assets work both locally and on Pages:
-
-```html
-<!-- index.html -->
-<link rel="icon" type="image/png" href="./favicon.png" />
-```
-
-And in code (for Notifications):
-
-```js
-// safe icon URL that respects Vite base
-const ICON_URL = `${location.origin}${import.meta.env.BASE_URL}favicon.png`;
-// use in notify(...)
-```
-
-### 3) GitHub Actions workflow
-
-Create `.github/workflows/deploy.yml`:
-
-```yml
-name: Deploy to GitHub Pages
-
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
-```
-
-Push to `main`, then enable **Settings → Pages → Source: GitHub Actions**.  
-If you get a white page, verify the `base` path is correct and clear the browser cache.
 
 ---
 
 ## Tech Stack
 
-- **React**, **Vite**
-- **Tailwind CSS**
-- **Framer Motion** (animations)
-- **Recharts** (weekly chart)
-- **react-hot-toast** (toasts)
-- **canvas-confetti** (celebrations)
-- Native **Notification API** & **WebAudio**
+- React + Vite
+- Tailwind CSS
+- Framer Motion
+- Capacitor and Local Notifications
+- canvas-confetti and react-hot-toast
 
 ---
 
-## Data & Privacy
+## Mobile Build
 
-All data lives in your browser’s **localStorage** under `ff.*` keys.  
-No servers, no accounts, no analytics.
+The web app can also be packaged for Android and iOS through Capacitor:
 
----
-
-## Recent Changes (highlights)
-
-- Fix: allow **Space** in inputs; guard global hotkeys
-- UI: widen **Remind** selects (show full “before”)
-- UI: add **? Help** tooltips for **Estimate** (tasks & editor)
-- UI: make date input wide enough to show full **year**
-- Habits: highlight **Done today**, and **auto-mark** after Pomodoro finishes
-- Layout: improved spacing/alignment in Done section
+```bash
+npm run cap:sync
+npm run cap:open:android
+npm run cap:open:ios
+```
 
 ---
 
 ## License
 
-Educational/personal project. Contributions and ideas are welcome - open an Issue or PR.
+Educational and personal project. Contributions and ideas are welcome through Issues and Pull Requests.
 
----
-
-**Have a focused day! 💙**
-
-# React + Vite
-
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
+<!--
 
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
 - [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
@@ -246,3 +91,4 @@ Currently, two official plugins are available:
 ## Expanding the ESLint configuration
 
 If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+-->
