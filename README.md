@@ -2,8 +2,8 @@
 
 Tiny productivity app that combines a **Pomodoro timer**, **mini-kanban tasks**, and **habits** - with browser notifications and a daily goal. Works fully in the browser and stores data locally.
 
-> Live demo (GitHub Pages): `https://<your-username>.github.io/focusflow/`  
-> _(Make sure Vite `base` is set to `/focusflow/` - see Deploy section.)_
+> Live demo (GitHub Pages): `https://viktoriyari.github.io/FocusPlanner/`
+> _(Vite `base` is set to `/FocusPlanner/` - see Deploy section.)_
 
 ---
 
@@ -110,7 +110,7 @@ If you’re building a production app, consider TypeScript with type-aware lint 
 
 ### 1) Set `base` in `vite.config.js`
 
-**Project page** (`https://username.github.io/focusflow/`):
+**Project page** (`https://viktoriyari.github.io/FocusPlanner/`):
 
 ```js
 import { defineConfig } from "vite";
@@ -118,7 +118,7 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  base: "/focusflow/", // 👈 repo name
+  base: "/FocusPlanner/", // 👈 repo name
 });
 ```
 

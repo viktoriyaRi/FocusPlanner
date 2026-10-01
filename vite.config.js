@@ -32,5 +32,5 @@ export default defineConfig(({ mode }) => ({
       ignored: ["**/ios/**", "**/android/**", "**/dist/**"],
     },
   },
-  base: mode === "mobile" ? "./" : "/focusflow/",
+  base: mode === "mobile" ? "./" : "/FocusPlanner/",
 }));

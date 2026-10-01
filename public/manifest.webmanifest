@@ -2,25 +2,25 @@
   "name": "FocusPlanner",
   "short_name": "FocusPlanner",
   "description": "Pomodoro timer, tasks, habits, and daily wins in one focused app.",
-  "start_url": "/focusflow/",
-  "scope": "/focusflow/",
+  "start_url": "/FocusPlanner/",
+  "scope": "/FocusPlanner/",
   "display": "standalone",
   "background_color": "#020617",
   "theme_color": "#2563eb",
   "orientation": "portrait",
   "icons": [
     {
-      "src": "/focusflow/icons/icon-192.png",
+      "src": "/FocusPlanner/icons/icon-192.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "/focusflow/icons/icon-512.png",
+      "src": "/FocusPlanner/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png"
     },
     {
-      "src": "/focusflow/icons/icon-512.png",
+      "src": "/FocusPlanner/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"

@@ -1,12 +1,12 @@
 const CACHE_NAME = "focusplanner-v2";
 const APP_SHELL = [
-  "/focusflow/",
-  "/focusflow/manifest.webmanifest",
-  "/focusflow/favicon.png",
-  "/focusflow/icons/icon-192.png",
-  "/focusflow/icons/icon-512.png",
-  "/focusflow/notification-energy-icon.svg",
-  "/focusflow/notification-energy-badge.svg",
+  "/FocusPlanner/",
+  "/FocusPlanner/manifest.webmanifest",
+  "/FocusPlanner/favicon.png",
+  "/FocusPlanner/icons/icon-192.png",
+  "/FocusPlanner/icons/icon-512.png",
+  "/FocusPlanner/notification-energy-icon.svg",
+  "/FocusPlanner/notification-energy-badge.svg",
 ];
 
 self.addEventListener("install", (event) => {
@@ -49,7 +49,7 @@ self.addEventListener("fetch", (event) => {
           }
           return response;
         })
-        .catch(() => caches.match("/focusflow/"));
+        .catch(() => caches.match("/FocusPlanner/"));
     })
   );
 });
