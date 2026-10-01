@@ -501,7 +501,7 @@ async function clearNativeNotifications() {
 async function notify(title, options = {}) {
   try {
     if (isNativeApp()) {
-      if (!(await hasNativeNotificationPermission())) return;
+      if (!(await hasNativeNotificationPermission())) return false;
       await LocalNotifications.schedule({
         notifications: [
           {
@@ -516,12 +516,12 @@ async function notify(title, options = {}) {
           },
         ],
       });
-      return;
+      return true;
     }
-    if (!canNotify()) return;
-    if (!secureOk()) return;
-    if (Notification.permission !== "granted") return;
-    new Notification(title, {
+    if (!canNotify() || !secureOk()) return false;
+    if (Notification.permission !== "granted") return false;
+
+    const notificationOptions = {
       // user-provided options first…
       ...options,
 
@@ -533,9 +533,27 @@ async function notify(title, options = {}) {
       icon: options.icon ?? NOTIFICATION_THEME.icon,
       badge: options.badge ?? NOTIFICATION_THEME.badge,
       timestamp: Date.now(),
-    });
+    };
+
+    // Prefer the service worker API for installed PWAs and browsers that do
+    // not support constructing Notification objects from a page.
+    if ("serviceWorker" in navigator) {
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (registration?.active && registration.showNotification) {
+        try {
+          await registration.showNotification(title, notificationOptions);
+          return true;
+        } catch (error) {
+          console.warn("service worker notification failed", error);
+        }
+      }
+    }
+
+    new Notification(title, notificationOptions);
+    return true;
   } catch (e) {
     console.warn("notify failed", e);
+    return false;
   }
 }
 
@@ -1433,7 +1451,10 @@ export default function FocusFlow() {
       const estimatedHeight = currentTourStep.key === "goal" ? 270 : 215;
       const left = Math.max(
         margin,
-        Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - margin),
+        Math.min(
+          rect.left + rect.width / 2 - width / 2,
+          window.innerWidth - width - margin,
+        ),
       );
       const belowTop = rect.bottom + gap;
       const top =
@@ -1441,7 +1462,11 @@ export default function FocusFlow() {
           ? belowTop
           : Math.max(margin, rect.top - estimatedHeight - gap);
 
-      setTourPopoverPosition({ top: Math.round(top), left: Math.round(left), width });
+      setTourPopoverPosition({
+        top: Math.round(top),
+        left: Math.round(left),
+        width,
+      });
     };
 
     const frame = requestAnimationFrame(updatePosition);
@@ -1508,46 +1533,64 @@ export default function FocusFlow() {
     if (!onboardingDone) return undefined;
 
     const REMINDER_KEY = (t) =>
-      `ff.todoRem@${t.id}@${t.due}@${t.remindMins || 0}`;
+      `ff.todoRem@${t.id}@${t.due}@${t.time || ""}@${t.remindMins || 0}`;
     const DUE_NOW_KEY = (t) => `ff.todoDueNow@${t.id}@${t.due}@${t.time || ""}`;
     const DUE_NOW_GRACE_MIN = 5;
 
     // Fire a single reminder per task/date/reminder combination
     const fireReminder = (t) => {
       const key = REMINDER_KEY(t);
-      if (localStorage.getItem(key) === "1") return;
-      localStorage.setItem(key, "1");
-
       const mins = Number(t.remindMins) || 0;
       const label =
         mins >= 60 && mins % 60 === 0 ? `${mins / 60}h` : `${mins}m`;
 
-      toast(`Reminder: ${t.title} in ${label}`, { duration: 5000 });
+      const toastKey = `${key}@toast`;
+      if (localStorage.getItem(toastKey) !== "1") {
+        localStorage.setItem(toastKey, "1");
+        toast(`Reminder: ${t.title} in ${label}`, { duration: 5000 });
+      }
 
-      if (canNotify() && Notification.permission === "granted") {
+      const notificationKey = `${key}@notification`;
+      if (
+        localStorage.getItem(notificationKey) !== "1" &&
+        canNotify() &&
+        Notification.permission === "granted"
+      ) {
+        localStorage.setItem(notificationKey, "1");
         notify("Task reminder", {
           body: `${t.title}${t.time ? ` at ${t.time}` : ""}`,
           silent: false,
           tag: `todo-${t.id}`,
+        }).then((shown) => {
+          if (!shown) localStorage.removeItem(notificationKey);
         });
       }
     };
 
     const fireDueNow = (t) => {
       const key = DUE_NOW_KEY(t);
-      if (localStorage.getItem(key) === "1") return;
-      localStorage.setItem(key, "1");
+      const toastKey = `${key}@toast`;
+      if (localStorage.getItem(toastKey) !== "1") {
+        localStorage.setItem(toastKey, "1");
+        toast(`Time to start: ${t.title}`, {
+          duration: 5000,
+          icon: "⏰",
+        });
+      }
 
-      toast(`Time to start: ${t.title}`, {
-        duration: 5000,
-        icon: "⏰",
-      });
-
-      if (canNotify() && Notification.permission === "granted") {
+      const notificationKey = `${key}@notification`;
+      if (
+        localStorage.getItem(notificationKey) !== "1" &&
+        canNotify() &&
+        Notification.permission === "granted"
+      ) {
+        localStorage.setItem(notificationKey, "1");
         notify("Time to start", {
           body: `${t.title}${t.time ? ` • ${t.time}` : ""}`,
           silent: false,
           tag: `todo-due-now-${t.id}`,
+        }).then((shown) => {
+          if (!shown) localStorage.removeItem(notificationKey);
         });
       }
     };
@@ -1653,11 +1696,17 @@ export default function FocusFlow() {
                 className="h-10 w-10 scale-[1.15] object-contain"
               />
               <span className="inline text-base font-bold tracking-tight sm:text-2xl">
-                Focus<span className="text-violet-600 dark:text-violet-300">Planner</span>
+                Focus
+                <span className="text-violet-600 dark:text-violet-300">
+                  Planner
+                </span>
               </span>
             </button>
 
-            <nav className="hidden h-full items-stretch gap-1 md:flex" aria-label="Main navigation">
+            <nav
+              className="hidden h-full items-stretch gap-1 md:flex"
+              aria-label="Main navigation"
+            >
               {[
                 ["dashboard", "Dashboard"],
                 ["tasks", "Tasks"],
@@ -1696,7 +1745,14 @@ export default function FocusFlow() {
                   aria-label="Today's reminders"
                   aria-expanded={notificationsOpen}
                 >
-                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="h-5 w-5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.9"
+                    aria-hidden="true"
+                  >
                     <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
                     <path d="M10 21h4" />
                   </svg>
@@ -1766,7 +1822,16 @@ export default function FocusFlow() {
                 title="Reset all data"
                 aria-label="Reset all data"
               >
-                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-5 w-5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.9"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
                   <path d="M20 11a8 8 0 1 0 2 5.2" />
                   <path d="M20 4v7h-7" />
                 </svg>
@@ -1783,7 +1848,14 @@ export default function FocusFlow() {
                 title="Toggle theme"
                 aria-label="Toggle theme"
               >
-                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-5 w-5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.9"
+                  aria-hidden="true"
+                >
                   <circle cx="12" cy="12" r="3.5" />
                   <path d="M12 2v2.5M12 19.5V22M4.93 4.93 6.7 6.7m10.6 10.6 1.77 1.77M2 12h2.5M19.5 12H22M4.93 19.07 6.7 17.3M17.3 6.7l1.77-1.77" />
                 </svg>
@@ -1797,19 +1869,30 @@ export default function FocusFlow() {
                 </summary>
                 <div className="absolute right-3 top-[calc(100%+8px)] z-[80] w-64 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl dark:border-slate-700 dark:bg-slate-900">
                   <div className="flex items-center justify-between gap-2 px-1 pb-2">
-                    <span className="text-sm font-semibold">Quick controls</span>
+                    <span className="text-sm font-semibold">
+                      Quick controls
+                    </span>
                     <span className="text-xs text-slate-500 dark:text-slate-400">
                       {todayReminders.length} reminders
                     </span>
                   </div>
                   <div className="max-h-32 space-y-1 overflow-y-auto rounded-xl bg-slate-50 p-2 text-xs dark:bg-slate-800/70">
                     {todayReminders.length === 0 ? (
-                      <p className="px-2 py-2 text-slate-500 dark:text-slate-400">No reminders for today.</p>
+                      <p className="px-2 py-2 text-slate-500 dark:text-slate-400">
+                        No reminders for today.
+                      </p>
                     ) : (
                       todayReminders.map((todo) => (
-                        <div key={todo.id} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5">
-                          <span className="truncate font-medium">{todo.title}</span>
-                          <span className="shrink-0 text-slate-500 dark:text-slate-400">{todo.time}</span>
+                        <div
+                          key={todo.id}
+                          className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5"
+                        >
+                          <span className="truncate font-medium">
+                            {todo.title}
+                          </span>
+                          <span className="shrink-0 text-slate-500 dark:text-slate-400">
+                            {todo.time}
+                          </span>
                         </div>
                       ))
                     )}
@@ -1820,7 +1903,10 @@ export default function FocusFlow() {
                       onClick={() => {
                         const root = document.documentElement;
                         const next = root.classList.toggle("dark");
-                        localStorage.setItem(THEME_KEY, next ? "dark" : "light");
+                        localStorage.setItem(
+                          THEME_KEY,
+                          next ? "dark" : "light",
+                        );
                         setThemeTick((tick) => tick + 1);
                         primeAudio();
                       }}
@@ -1831,7 +1917,12 @@ export default function FocusFlow() {
                     <button
                       type="button"
                       onClick={() => {
-                        if (window.confirm("Clear all FocusPlanner data and restart the app? This cannot be undone.")) resetApp();
+                        if (
+                          window.confirm(
+                            "Clear all FocusPlanner data and restart the app? This cannot be undone.",
+                          )
+                        )
+                          resetApp();
                       }}
                       className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-left text-sm font-medium text-rose-600 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300"
                     >
@@ -1850,7 +1941,10 @@ export default function FocusFlow() {
               />
             </div>
           </div>
-          <nav className="flex gap-1 overflow-x-auto pb-2 md:hidden" aria-label="Mobile navigation">
+          <nav
+            className="flex gap-1 overflow-x-auto pb-2 md:hidden"
+            aria-label="Mobile navigation"
+          >
             {[
               ["dashboard", "Dashboard"],
               ["tasks", "Tasks"],
@@ -1877,7 +1971,7 @@ export default function FocusFlow() {
         {/* Content Area */}
         <div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-4 sm:px-6 sm:py-5">
           {currentPage === "dashboard" && (
-          <div className="w-full min-w-0">
+            <div className="w-full min-w-0">
               <div className="mb-6">
                 <h1 className="text-lg font-semibold tracking-tight sm:text-xl">
                   Welcome to FocusPlanner! 👋
@@ -1887,85 +1981,87 @@ export default function FocusFlow() {
                 </p>
               </div>
               <div className="grid gap-3 xl:grid-cols-12">
-              {/* Tasks Section */}
-              <SectionCard
-                ref={tasksRef}
-                highlight={tourActive && currentTourStep?.key === "tasks"}
-                className="xl:col-span-6"
-              >
-                <h2 className="text-lg font-semibold mb-4">
-                  Tasks (Mini-Kanban)
-                </h2>
-                <Board
-                  todos={todos}
-                  setTodos={setTodos}
-                  onStartTask={startTask}
-                  onStopTask={stopActiveTask}
-                  activeTodoId={activeTodoId}
-                />
-              </SectionCard>
-
-              {/* Pomodoro Section */}
-              <SectionCard
-                ref={pomoRef}
-                highlight={tourActive && currentTourStep?.key === "pomodoro"}
-                className="xl:col-span-6 sm:!p-3 md:!p-3 bg-[radial-gradient(ellipse_at_50%_62%,rgba(196,181,253,0.46)_0%,rgba(237,233,254,0.34)_48%,transparent_84%)] dark:bg-[radial-gradient(ellipse_at_50%_62%,rgba(124,58,237,0.38)_0%,rgba(49,46,129,0.22)_55%,transparent_84%)]"
-              >
-                <Pomodoro
-                  pomo={pomo}
-                  setPomo={setPomo}
-                  externalStartSignal={startSignal}
-                  externalStopSignal={stopSignal}
-                  currentTask={currentTask}
-                  activeHabitId={activeHabitId}
-                  activeTodoId={activeTodoId}
-                  onSessionClear={clearActiveSessionUi}
-                  onHabitAutoDone={markHabitDoneById}
-                  onTodoAutoDone={markTodoDoneById}
-                />
-              </SectionCard>
-
-              {/* Habits Section */}
-              <SectionCard
-                ref={habitsRef}
-                highlight={tourActive && currentTourStep?.key === "habits"}
-                className="xl:col-span-6"
-              >
-                <Habits
-                  habits={habits}
-                  setHabits={setHabits}
-                  onStartHabit={startHabit}
-                  onStopHabit={stopActiveTask}
-                  activeHabitId={activeHabitId}
-                />
-              </SectionCard>
-
-              {/* Daily Goal Section */}
-              <SectionCard
-                ref={goalRef}
-                highlight={tourActive && currentTourStep?.key === "goal"}
-                className="xl:col-span-6"
-              >
-                <DailyGoal
-                  pomo={pomo}
-                  habits={habits}
-                  avatarSrc={avatarSrc}
-                  profileName={profileName}
-                  tourPreviewOpen={tourActive && currentTourStep?.key === "goal"}
-                />
-              </SectionCard>
-
-              {/* Weekly summary */}
-              <div className="xl:col-span-12">
-                <SectionCard>
-                  <WeeklyChart
-                    key={themeTick}
-                    pomo={pomo}
+                {/* Tasks Section */}
+                <SectionCard
+                  ref={tasksRef}
+                  highlight={tourActive && currentTourStep?.key === "tasks"}
+                  className="xl:col-span-6"
+                >
+                  <h2 className="text-lg font-semibold mb-4">
+                    Tasks (Mini-Kanban)
+                  </h2>
+                  <Board
                     todos={todos}
-                    habits={habits}
+                    setTodos={setTodos}
+                    onStartTask={startTask}
+                    onStopTask={stopActiveTask}
+                    activeTodoId={activeTodoId}
                   />
                 </SectionCard>
-              </div>
+
+                {/* Pomodoro Section */}
+                <SectionCard
+                  ref={pomoRef}
+                  highlight={tourActive && currentTourStep?.key === "pomodoro"}
+                  className="xl:col-span-6 sm:!p-3 md:!p-3 bg-[radial-gradient(ellipse_at_50%_62%,rgba(196,181,253,0.46)_0%,rgba(237,233,254,0.34)_48%,transparent_84%)] dark:bg-[radial-gradient(ellipse_at_50%_62%,rgba(124,58,237,0.38)_0%,rgba(49,46,129,0.22)_55%,transparent_84%)]"
+                >
+                  <Pomodoro
+                    pomo={pomo}
+                    setPomo={setPomo}
+                    externalStartSignal={startSignal}
+                    externalStopSignal={stopSignal}
+                    currentTask={currentTask}
+                    activeHabitId={activeHabitId}
+                    activeTodoId={activeTodoId}
+                    onSessionClear={clearActiveSessionUi}
+                    onHabitAutoDone={markHabitDoneById}
+                    onTodoAutoDone={markTodoDoneById}
+                  />
+                </SectionCard>
+
+                {/* Habits Section */}
+                <SectionCard
+                  ref={habitsRef}
+                  highlight={tourActive && currentTourStep?.key === "habits"}
+                  className="xl:col-span-6"
+                >
+                  <Habits
+                    habits={habits}
+                    setHabits={setHabits}
+                    onStartHabit={startHabit}
+                    onStopHabit={stopActiveTask}
+                    activeHabitId={activeHabitId}
+                  />
+                </SectionCard>
+
+                {/* Daily Goal Section */}
+                <SectionCard
+                  ref={goalRef}
+                  highlight={tourActive && currentTourStep?.key === "goal"}
+                  className="xl:col-span-6"
+                >
+                  <DailyGoal
+                    pomo={pomo}
+                    habits={habits}
+                    avatarSrc={avatarSrc}
+                    profileName={profileName}
+                    tourPreviewOpen={
+                      tourActive && currentTourStep?.key === "goal"
+                    }
+                  />
+                </SectionCard>
+
+                {/* Weekly summary */}
+                <div className="xl:col-span-12">
+                  <SectionCard>
+                    <WeeklyChart
+                      key={themeTick}
+                      pomo={pomo}
+                      todos={todos}
+                      habits={habits}
+                    />
+                  </SectionCard>
+                </div>
               </div>
             </div>
           )}
@@ -2037,7 +2133,7 @@ export default function FocusFlow() {
 
           {currentPage === "settings" && (
             <div className="max-w-md space-y-4">
-    <div className="space-y-2">
+              <div className="space-y-2">
                 <h3 className="font-semibold">App Settings</h3>
                 <label className="flex items-center justify-between gap-3 text-sm">
                   <span>Color theme</span>
@@ -2175,62 +2271,64 @@ export default function FocusFlow() {
         <>
           <div className="fixed inset-0 z-40 bg-slate-950/28 backdrop-blur-[1px]" />
           {createPortal(
-          <div
-            className="fixed z-[100] w-[calc(100vw-2rem)] max-w-md transition-[top,left] duration-200"
-            style={
-              tourPopoverPosition
-                ? {
-                    top: tourPopoverPosition.top,
-                    left: tourPopoverPosition.left,
-                    width: tourPopoverPosition.width,
-                  }
-                : { top: 16, left: 16 }
-            }
-          >
             <div
-              className={`rounded-3xl border border-slate-200/90 !bg-white p-4 shadow-2xl backdrop-blur-xl dark:border-slate-700/90 dark:!bg-slate-900 md:p-5 ${pageThemeConfig.card}`}
+              className="fixed z-[100] w-[calc(100vw-2rem)] max-w-md transition-[top,left] duration-200"
+              style={
+                tourPopoverPosition
+                  ? {
+                      top: tourPopoverPosition.top,
+                      left: tourPopoverPosition.left,
+                      width: tourPopoverPosition.width,
+                    }
+                  : { top: 16, left: 16 }
+              }
             >
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.22em] text-sky-400/90">
-                    Step {tourStepIndex + 1} of {tourSteps.length}
-                  </p>
-                  <h3 className="mt-1 text-lg font-semibold">
-                    {currentTourStep.title}
-                  </h3>
-                  <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                    {currentTourStep.description}
-                  </p>
+              <div
+                className={`rounded-3xl border border-slate-200/90 !bg-white p-4 shadow-2xl backdrop-blur-xl dark:border-slate-700/90 dark:!bg-slate-900 md:p-5 ${pageThemeConfig.card}`}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.22em] text-sky-400/90">
+                      Step {tourStepIndex + 1} of {tourSteps.length}
+                    </p>
+                    <h3 className="mt-1 text-lg font-semibold">
+                      {currentTourStep.title}
+                    </h3>
+                    <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                      {currentTourStep.description}
+                    </p>
+                  </div>
+                  {tourStepIndex < tourSteps.length - 1 && (
+                    <button
+                      onClick={completeOnboarding}
+                      className={`rounded-full border px-3 py-1 text-xs ${pageThemeConfig.secondaryButton}`}
+                    >
+                      Skip
+                    </button>
+                  )}
                 </div>
-                {tourStepIndex < tourSteps.length - 1 && (
+                <div className="mt-4 flex items-center justify-between gap-3">
                   <button
-                    onClick={completeOnboarding}
-                    className={`rounded-full border px-3 py-1 text-xs ${pageThemeConfig.secondaryButton}`}
+                    onClick={prevTourStep}
+                    disabled={tourStepIndex === 0}
+                    className={`rounded-xl border px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50 ${pageThemeConfig.secondaryButton}`}
                   >
-                    Skip
+                    Back
                   </button>
-                )}
-              </div>
-              <div className="mt-4 flex items-center justify-between gap-3">
-                <button
-                  onClick={prevTourStep}
-                  disabled={tourStepIndex === 0}
-                  className={`rounded-xl border px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50 ${pageThemeConfig.secondaryButton}`}
-                >
-                  Back
-                </button>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={nextTourStep}
-                    className={`rounded-xl px-4 py-2 text-sm ${pageThemeConfig.primaryButton}`}
-                  >
-                    {tourStepIndex === tourSteps.length - 1 ? "Finish" : "Next"}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={nextTourStep}
+                      className={`rounded-xl px-4 py-2 text-sm ${pageThemeConfig.primaryButton}`}
+                    >
+                      {tourStepIndex === tourSteps.length - 1
+                        ? "Finish"
+                        : "Next"}
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>,
-          document.body,
+            </div>,
+            document.body,
           )}
         </>
       )}
@@ -2389,7 +2487,9 @@ function AvatarPicker({
               Profile
             </span>
           </span>
-          <span className="text-sm text-violet-600 dark:text-violet-300">⌄</span>
+          <span className="text-sm text-violet-600 dark:text-violet-300">
+            ⌄
+          </span>
         </button>
       ) : (
         <div className="flex flex-col items-center">
@@ -2519,39 +2619,39 @@ function AvatarPicker({
               Profile photo
             </p>
             <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-5 sm:gap-3">
-            {PRESET_AVATARS.map((avatar) => {
-              const active = avatar.src === avatarSrc;
-              return (
-                <button
-                  key={avatar.id}
-                  onClick={() => applyAvatar(avatar.src)}
-                  className={`rounded-2xl border p-1.5 transition ${
-                    active
-                      ? "border-violet-400 ring-2 ring-violet-300/50"
-                      : "border-transparent hover:border-slate-300 dark:hover:border-slate-600"
-                  }`}
-                  title={avatar.label}
-                >
-                  <img
-                    src={avatar.src}
-                    alt={avatar.label}
-                    className="h-11 w-11 rounded-xl object-cover sm:h-12 sm:w-12"
-                  />
-                </button>
-              );
-            })}
-            <label
-              className="flex h-11 w-11 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-violet-300 text-violet-600 transition hover:bg-violet-50 sm:h-[60px] sm:w-[60px] sm:rounded-2xl dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-950/30"
-            >
-              <span className="text-lg leading-none sm:text-2xl">+</span>
-              <span className="mt-0.5 text-[8px] font-medium sm:mt-1 sm:text-[10px]">Upload</span>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={onUpload}
-                className="hidden"
-              />
-            </label>
+              {PRESET_AVATARS.map((avatar) => {
+                const active = avatar.src === avatarSrc;
+                return (
+                  <button
+                    key={avatar.id}
+                    onClick={() => applyAvatar(avatar.src)}
+                    className={`rounded-2xl border p-1.5 transition ${
+                      active
+                        ? "border-violet-400 ring-2 ring-violet-300/50"
+                        : "border-transparent hover:border-slate-300 dark:hover:border-slate-600"
+                    }`}
+                    title={avatar.label}
+                  >
+                    <img
+                      src={avatar.src}
+                      alt={avatar.label}
+                      className="h-11 w-11 rounded-xl object-cover sm:h-12 sm:w-12"
+                    />
+                  </button>
+                );
+              })}
+              <label className="flex h-11 w-11 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-violet-300 text-violet-600 transition hover:bg-violet-50 sm:h-[60px] sm:w-[60px] sm:rounded-2xl dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-950/30">
+                <span className="text-lg leading-none sm:text-2xl">+</span>
+                <span className="mt-0.5 text-[8px] font-medium sm:mt-1 sm:text-[10px]">
+                  Upload
+                </span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={onUpload}
+                  className="hidden"
+                />
+              </label>
             </div>
           </div>
 
@@ -2716,10 +2816,7 @@ function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
     [nowTick],
   );
 
-  const isDueToday = useCallback(
-    (t) => !t?.done && t?.due === todayKey(),
-    [],
-  );
+  const isDueToday = useCallback((t) => !t?.done && t?.due === todayKey(), []);
 
   // Missed: has date+time, they passed (with grace), not done and not started
   const GRACE_MIN = 5;
@@ -2798,7 +2895,9 @@ function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
     setTodos((current) => current.filter((item) => item.id !== id));
     showUndoToast("Task deleted", () => {
       setTodos((current) =>
-        current.some((item) => item.id === todo.id) ? current : [todo, ...current],
+        current.some((item) => item.id === todo.id)
+          ? current
+          : [todo, ...current],
       );
     });
   };
@@ -2897,98 +2996,98 @@ function Board({ todos, setTodos, onStartTask, onStopTask, activeTodoId }) {
 
           {formOpen && (
             <div className="mt-3 flex flex-wrap items-center gap-2 rounded-2xl border border-violet-200 bg-violet-50/60 p-3 dark:border-violet-900/70 dark:bg-violet-950/20">
-            <input
-              ref={taskInputRef}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") add();
-                if (e.key === "Escape") closeTaskForm();
-              }}
-              placeholder="Add a task…"
-              className="h-9 min-w-0 grow basis-full md:basis-[240px] rounded-xl border border-slate-200 bg-white text-slate-900 px-3
+              <input
+                ref={taskInputRef}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") add();
+                  if (e.key === "Escape") closeTaskForm();
+                }}
+                placeholder="Add a task…"
+                className="h-9 min-w-0 grow basis-full md:basis-[240px] rounded-xl border border-slate-200 bg-white text-slate-900 px-3
                  focus:outline-none focus:ring-2 focus:ring-slate-300 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-100 dark:placeholder:text-slate-400"
-            />
+              />
 
-            {/* Priority — send to the end on mobile */}
-            <select
-              value={priority}
-              onChange={(e) => setPriority(e.target.value)}
-              title="Priority"
-              className="order-10 md:order-none h-9 shrink-0 w-[88px] rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
-            >
-              <option value="high">High</option>
-              <option value="med">Med</option>
-              <option value="low">Low</option>
-            </select>
+              {/* Priority — send to the end on mobile */}
+              <select
+                value={priority}
+                onChange={(e) => setPriority(e.target.value)}
+                title="Priority"
+                className="order-10 md:order-none h-9 shrink-0 w-[88px] rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
+              >
+                <option value="high">High</option>
+                <option value="med">Med</option>
+                <option value="low">Low</option>
+              </select>
 
-            {/* Date */}
-            <input
-              type="date"
-              value={due}
-              onChange={(e) => setDue(e.target.value)}
-              title="Due date"
-              className="h-9 shrink-0 basis-[150px] rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
-            />
+              {/* Date */}
+              <input
+                type="date"
+                value={due}
+                onChange={(e) => setDue(e.target.value)}
+                title="Due date"
+                className="h-9 shrink-0 basis-[150px] rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
+              />
 
-            {/* Time */}
-            <input
-              type="time"
-              value={time}
-              onChange={(e) => setTime(e.target.value)}
-              title="Time"
-              className="h-9 shrink-0 basis-[110px] rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
-            />
+              {/* Time */}
+              <input
+                type="time"
+                value={time}
+                onChange={(e) => setTime(e.target.value)}
+                title="Time"
+                className="h-9 shrink-0 basis-[110px] rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
+              />
 
-            <select
-              value={estimate}
-              onChange={(e) => setEstimate(e.target.value)}
-              title="Task duration"
-              aria-label="Task duration"
-              className="h-9 shrink-0 basis-[132px] rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
-            >
-              <option value="">Duration</option>
-              <option value="5">5 min</option>
-              <option value="10">10 min</option>
-              <option value="15">15 min</option>
-              <option value="20">20 min</option>
-              <option value="25">25 min</option>
-              <option value="30">30 min</option>
-              <option value="45">45 min</option>
-              <option value="60">1 hour</option>
-              <option value="90">1.5 hours</option>
-              <option value="120">2 hours</option>
-            </select>
+              <select
+                value={estimate}
+                onChange={(e) => setEstimate(e.target.value)}
+                title="Task duration"
+                aria-label="Task duration"
+                className="h-9 shrink-0 basis-[132px] rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
+              >
+                <option value="">Duration</option>
+                <option value="5">5 min</option>
+                <option value="10">10 min</option>
+                <option value="15">15 min</option>
+                <option value="20">20 min</option>
+                <option value="25">25 min</option>
+                <option value="30">30 min</option>
+                <option value="45">45 min</option>
+                <option value="60">1 hour</option>
+                <option value="90">1.5 hours</option>
+                <option value="120">2 hours</option>
+              </select>
 
-            {/* Remind — a bit wider so “before” is fully visible */}
-            <select
-              value={remind}
-              onChange={(e) => setRemind(parseInt(e.target.value))}
-              title="Remind"
-              className="h-9 shrink-0 basis-[132px] rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
-            >
-              <option value={0}>No alert</option>
-              <option value={5}>5m before</option>
-              <option value={15}>15m before</option>
-              <option value={30}>30m before</option>
-              <option value={60}>1h before</option>
-              <option value={120}>2h before</option>
-              <option value={1440}>1 day before</option>
-            </select>
+              {/* Remind — a bit wider so “before” is fully visible */}
+              <select
+                value={remind}
+                onChange={(e) => setRemind(parseInt(e.target.value))}
+                title="Remind"
+                className="h-9 shrink-0 basis-[132px] rounded-xl border px-3 bg-white dark:bg-slate-900 dark:border-slate-700"
+              >
+                <option value={0}>No alert</option>
+                <option value={5}>5m before</option>
+                <option value={15}>15m before</option>
+                <option value={30}>30m before</option>
+                <option value={60}>1h before</option>
+                <option value={120}>2h before</option>
+                <option value={1440}>1 day before</option>
+              </select>
 
-            <button
-              onClick={add}
-              className={`order-20 md:order-none h-9 shrink-0 px-3 rounded-xl w-full sm:w-auto ${POMODORO_ACTION_BUTTON}`}
-            >
-              Add task
-            </button>
-            <button
-              type="button"
-              onClick={closeTaskForm}
-              className={`order-20 h-9 shrink-0 rounded-xl border px-3 text-sm ${theme.secondaryButton}`}
-            >
-              Cancel
-            </button>
+              <button
+                onClick={add}
+                className={`order-20 md:order-none h-9 shrink-0 px-3 rounded-xl w-full sm:w-auto ${POMODORO_ACTION_BUTTON}`}
+              >
+                Add task
+              </button>
+              <button
+                type="button"
+                onClick={closeTaskForm}
+                className={`order-20 h-9 shrink-0 rounded-xl border px-3 text-sm ${theme.secondaryButton}`}
+              >
+                Cancel
+              </button>
             </div>
           )}
         </div>
@@ -3107,7 +3206,8 @@ function Column({
         })}${item.time ? `, ${item.time}` : ""}`
       : "No date";
     const estimateLabel =
-      Number.isFinite(Number(item.estimateMins)) && Number(item.estimateMins) > 0
+      Number.isFinite(Number(item.estimateMins)) &&
+      Number(item.estimateMins) > 0
         ? `${item.estimateMins} min`
         : null;
     const reminderMinutes = Number(item.remindMins) || 0;
@@ -3126,9 +3226,7 @@ function Column({
           (inProgress
             ? "bg-violet-50/80 shadow-[inset_3px_0_0_rgb(124_58_237)] dark:bg-violet-950/25 "
             : "") +
-          (dueNow
-            ? "bg-amber-50/70 dark:bg-amber-950/20 "
-            : "") +
+          (dueNow ? "bg-amber-50/70 dark:bg-amber-950/20 " : "") +
           (needsAttention
             ? "border-amber-300 bg-amber-50/70 shadow-[inset_3px_0_0_rgb(245_158_11)] dark:border-amber-800 dark:bg-amber-950/20 "
             : "") +
@@ -3139,133 +3237,147 @@ function Column({
       >
         {!editing ? (
           <>
-          <div className="grid w-full max-w-[710px] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 2xl:grid-cols-[minmax(180px,1fr)_60px_72px_minmax(150px,1fr)] 2xl:gap-2 2xl:pr-32">
-            <span
-              className={
-                "truncate font-medium " +
-                (item.done ? "line-through text-slate-400" : "")
-              }
-              title={item.title}
-            >
-              {item.title}
-            </span>
-            <span className={`justify-self-end rounded-full px-3 py-1 text-xs font-medium 2xl:justify-self-center ${priorityClass}`}>
-              {item.priority === "high"
-                ? "High"
-                : item.priority === "low"
-                  ? "Low"
-                  : "Med"}
-            </span>
-            {inProgress ? (
-              <span className="hidden justify-self-center rounded-full bg-violet-100 px-2 py-1 text-[10px] font-semibold text-violet-700 2xl:inline-flex dark:bg-violet-900/60 dark:text-violet-200">
-                In focus
-              </span>
-            ) : missed ? (
-              <span className="hidden justify-self-center rounded-full bg-rose-100 px-2 py-1 text-[10px] font-semibold text-rose-700 2xl:inline-flex dark:bg-rose-950/60 dark:text-rose-200">
-                Overdue
-              </span>
-            ) : dueNow ? (
-              <span className="hidden justify-self-center rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700 2xl:inline-flex dark:bg-amber-950/60 dark:text-amber-200">
-                Due now
-              </span>
-            ) : reminderActive ? (
-              <span className="hidden justify-self-center rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700 2xl:inline-flex dark:bg-amber-950/60 dark:text-amber-200">
-                Due soon
-              </span>
-            ) : dueToday ? (
-              <span className="hidden justify-self-center rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700 2xl:inline-flex dark:bg-amber-950/60 dark:text-amber-200">
-                Due today
-              </span>
-            ) : (
-              <span aria-hidden="true" className="hidden 2xl:block" />
-            )}
-            <span className="col-span-2 inline-flex min-w-0 justify-self-start items-center gap-2 truncate text-sm font-medium text-slate-600 2xl:col-span-1 dark:text-slate-300">
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="h-4 w-4 shrink-0"
+            <div className="grid w-full max-w-[710px] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 2xl:grid-cols-[minmax(180px,1fr)_60px_72px_minmax(150px,1fr)] 2xl:gap-2 2xl:pr-32">
+              <span
+                className={
+                  "truncate font-medium " +
+                  (item.done ? "line-through text-slate-400" : "")
+                }
+                title={item.title}
               >
-                <rect x="3.5" y="5.5" width="17" height="15" rx="2.5" />
-                <path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17" />
-              </svg>
-              {dateLabel}
-              {estimateLabel && (
-                <>
-                  <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">•</span>
-                  <span>{estimateLabel}</span>
-                </>
+                {item.title}
+              </span>
+              <span
+                className={`justify-self-end rounded-full px-3 py-1 text-xs font-medium 2xl:justify-self-center ${priorityClass}`}
+              >
+                {item.priority === "high"
+                  ? "High"
+                  : item.priority === "low"
+                    ? "Low"
+                    : "Med"}
+              </span>
+              {inProgress ? (
+                <span className="hidden justify-self-center rounded-full bg-violet-100 px-2 py-1 text-[10px] font-semibold text-violet-700 2xl:inline-flex dark:bg-violet-900/60 dark:text-violet-200">
+                  In focus
+                </span>
+              ) : missed ? (
+                <span className="hidden justify-self-center rounded-full bg-rose-100 px-2 py-1 text-[10px] font-semibold text-rose-700 2xl:inline-flex dark:bg-rose-950/60 dark:text-rose-200">
+                  Overdue
+                </span>
+              ) : dueNow ? (
+                <span className="hidden justify-self-center rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700 2xl:inline-flex dark:bg-amber-950/60 dark:text-amber-200">
+                  Due now
+                </span>
+              ) : reminderActive ? (
+                <span className="hidden justify-self-center rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700 2xl:inline-flex dark:bg-amber-950/60 dark:text-amber-200">
+                  Due soon
+                </span>
+              ) : dueToday ? (
+                <span className="hidden justify-self-center rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-700 2xl:inline-flex dark:bg-amber-950/60 dark:text-amber-200">
+                  Due today
+                </span>
+              ) : (
+                <span aria-hidden="true" className="hidden 2xl:block" />
               )}
-              {reminderLabel && (
-                <>
-                  <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">•</span>
-                  <span
-                    className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-violet-600 dark:text-violet-300"
-                    title={`Reminder ${reminderLabel}`}
-                  >
-                    <svg
+              <span className="col-span-2 inline-flex min-w-0 justify-self-start items-center gap-2 truncate text-sm font-medium text-slate-600 2xl:col-span-1 dark:text-slate-300">
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-4 w-4 shrink-0"
+                >
+                  <rect x="3.5" y="5.5" width="17" height="15" rx="2.5" />
+                  <path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17" />
+                </svg>
+                {dateLabel}
+                {estimateLabel && (
+                  <>
+                    <span
                       aria-hidden="true"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="h-3.5 w-3.5"
+                      className="text-slate-300 dark:text-slate-600"
                     >
-                      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
-                      <path d="M10 21h4" />
-                    </svg>
-                    {reminderLabel}
-                  </span>
-                </>
+                      •
+                    </span>
+                    <span>{estimateLabel}</span>
+                  </>
+                )}
+                {reminderLabel && (
+                  <>
+                    <span
+                      aria-hidden="true"
+                      className="text-slate-300 dark:text-slate-600"
+                    >
+                      •
+                    </span>
+                    <span
+                      className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-violet-600 dark:text-violet-300"
+                      title={`Reminder ${reminderLabel}`}
+                    >
+                      <svg
+                        aria-hidden="true"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="h-3.5 w-3.5"
+                      >
+                        <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+                        <path d="M10 21h4" />
+                      </svg>
+                      {reminderLabel}
+                    </span>
+                  </>
+                )}
+              </span>
+            </div>
+            <div className="mt-2 flex items-center justify-end gap-3 2xl:absolute 2xl:right-3 2xl:top-1/2 2xl:mt-0 2xl:-translate-y-1/2">
+              {!item.done && (
+                <button
+                  onClick={() => {
+                    if (inProgress) onStopTask?.();
+                    else onStartTask?.(item);
+                  }}
+                  className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium ${
+                    inProgress
+                      ? "border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300 dark:hover:bg-rose-950"
+                      : POMODORO_ACTION_BUTTON
+                  }`}
+                  title={inProgress ? "Stop active task" : "Start task"}
+                  aria-label={
+                    inProgress ? `Stop ${item.title}` : `Start ${item.title}`
+                  }
+                >
+                  <ActionIcon name={inProgress ? "stop" : "play"} />
+                </button>
               )}
-            </span>
-          </div>
-          <div className="mt-2 flex items-center justify-end gap-3 2xl:absolute 2xl:right-3 2xl:top-1/2 2xl:mt-0 2xl:-translate-y-1/2">
-            {!item.done && (
               <button
+                type="button"
                 onClick={() => {
-                  if (inProgress) onStopTask?.();
-                  else onStartTask?.(item);
+                  taskEditorOpenRef.current = true;
+                  setEditing(true);
                 }}
-                className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium ${
-                  inProgress
-                    ? "border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300 dark:hover:bg-rose-950"
-                    : POMODORO_ACTION_BUTTON
-                }`}
-                title={inProgress ? "Stop active task" : "Start task"}
-                aria-label={inProgress ? `Stop ${item.title}` : `Start ${item.title}`}
+                className={`flex h-8 w-8 items-center justify-center rounded-lg border text-sm ${theme.secondaryButton}`}
+                title="Edit task"
+                aria-label={`Edit ${item.title}`}
               >
-                <ActionIcon name={inProgress ? "stop" : "play"} />
+                <ActionIcon name="edit" />
               </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                taskEditorOpenRef.current = true;
-                setEditing(true);
-              }}
-              className={`flex h-8 w-8 items-center justify-center rounded-lg border text-sm ${theme.secondaryButton}`}
-              title="Edit task"
-              aria-label={`Edit ${item.title}`}
-            >
-              <ActionIcon name="edit" />
-            </button>
-            <button
-              type="button"
-              onClick={() => onRemove(item.id)}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50/50 text-sm text-rose-600 hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300 dark:hover:bg-rose-950/50"
-              title="Delete task"
-              aria-label={`Delete ${item.title}`}
-            >
-              <ActionIcon name="delete" />
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={() => onRemove(item.id)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50/50 text-sm text-rose-600 hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300 dark:hover:bg-rose-950/50"
+                title="Delete task"
+                aria-label={`Delete ${item.title}`}
+              >
+                <ActionIcon name="delete" />
+              </button>
+            </div>
           </>
         ) : (
           <div className="flex flex-wrap items-center gap-2">
@@ -3860,10 +3972,12 @@ function Pomodoro({
         }`}
         aria-hidden={!(sessionTaskLabel || currentTask)}
       >
-          <p className="truncate text-xs font-semibold text-slate-800 dark:text-slate-100">
-            <span className="font-normal text-slate-500 dark:text-slate-400">Working on: </span>
-            {sessionTaskLabel || currentTask}
-          </p>
+        <p className="truncate text-xs font-semibold text-slate-800 dark:text-slate-100">
+          <span className="font-normal text-slate-500 dark:text-slate-400">
+            Working on:{" "}
+          </span>
+          {sessionTaskLabel || currentTask}
+        </p>
       </div>
 
       <div className="mx-auto flex w-full max-w-md items-center justify-between gap-2 text-sm sm:gap-3">
@@ -3897,52 +4011,52 @@ function Pomodoro({
           <summary className="cursor-pointer text-xs font-medium text-slate-500 marker:content-none dark:text-slate-400">
             ⚙ Timer settings
           </summary>
-        <div className="mt-3 space-y-3">
-          {/* Volume */}
-          <div className="flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-            <span>Volume</span>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={volume}
-              onChange={(e) => setVolume(parseFloat(e.target.value))}
-              className="w-40"
-              style={{
-                accentColor: isDark()
-                  ? theme.rangeAccentDark
-                  : theme.rangeAccent,
-              }}
-              aria-label="Win sound volume"
-            />
-            <span>{Math.round(volume * 100)}%</span>
-          </div>
+          <div className="mt-3 space-y-3">
+            {/* Volume */}
+            <div className="flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <span>Volume</span>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={volume}
+                onChange={(e) => setVolume(parseFloat(e.target.value))}
+                className="w-40"
+                style={{
+                  accentColor: isDark()
+                    ? theme.rangeAccentDark
+                    : theme.rangeAccent,
+                }}
+                aria-label="Win sound volume"
+              />
+              <span>{Math.round(volume * 100)}%</span>
+            </div>
 
-          {/* Melody */}
-          <div className="flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-            <span>Melody</span>
-            <select
-              value={melody}
-              onChange={(e) => setMelody(e.target.value)}
-              className="h-8 rounded-lg border px-2 bg-white dark:bg-slate-900 dark:border-slate-700"
-              aria-label="Win melody"
-            >
-              {Object.entries(MELODIES).map(([key, cfg]) => (
-                <option key={key} value={key}>
-                  {cfg.label}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={() =>
-                playMelodyByName(ensureAudioContext(), melody, volume)
-              }
-              className={`h-8 rounded-lg border px-2 ${theme.secondaryButton}`}
-            >
-              Test
-            </button>
-          </div>
+            {/* Melody */}
+            <div className="flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <span>Melody</span>
+              <select
+                value={melody}
+                onChange={(e) => setMelody(e.target.value)}
+                className="h-8 rounded-lg border px-2 bg-white dark:bg-slate-900 dark:border-slate-700"
+                aria-label="Win melody"
+              >
+                {Object.entries(MELODIES).map(([key, cfg]) => (
+                  <option key={key} value={key}>
+                    {cfg.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() =>
+                  playMelodyByName(ensureAudioContext(), melody, volume)
+                }
+                className={`h-8 rounded-lg border px-2 ${theme.secondaryButton}`}
+              >
+                Test
+              </button>
+            </div>
           </div>
         </details>
       </div>
@@ -3995,7 +4109,9 @@ function Habits({
     setHabits((current) => current.filter((item) => item.id !== id));
     showUndoToast("Habit deleted", () => {
       setHabits((current) =>
-        current.some((item) => item.id === habit.id) ? current : [habit, ...current],
+        current.some((item) => item.id === habit.id)
+          ? current
+          : [habit, ...current],
       );
     });
   };
@@ -4110,14 +4226,14 @@ function Habits({
 
       {habits.length > 0 && (
         <div className="mt-3 mb-2 ml-3 hidden w-full max-w-[710px] grid-cols-[minmax(240px,1fr)_68px_72px_repeat(7,26px)] items-center gap-2 text-xs font-semibold text-slate-400 2xl:grid dark:text-slate-500">
-            <span />
-            <span />
-            <span />
-            {"MTWTFSS".split("").map((day, index) => (
-              <span key={`${day}-${index}`} className="text-center">
-                {day}
-              </span>
-            ))}
+          <span />
+          <span />
+          <span />
+          {"MTWTFSS".split("").map((day, index) => (
+            <span key={`${day}-${index}`} className="text-center">
+              {day}
+            </span>
+          ))}
         </div>
       )}
 
@@ -4133,7 +4249,9 @@ function Habits({
               : null;
             const lastDoneColumn =
               lastDoneDate && !Number.isNaN(lastDoneDate.getTime())
-                ? Math.round((lastDoneDate.getTime() - weekStart.getTime()) / 86400000)
+                ? Math.round(
+                    (lastDoneDate.getTime() - weekStart.getTime()) / 86400000,
+                  )
                 : -1;
             const activeDays = Math.min(7, Math.max(1, h.streak || 0));
             const firstActiveDay = Math.max(0, lastDoneColumn - activeDays + 1);
@@ -4192,7 +4310,9 @@ function Habits({
                     <div className="grid w-full max-w-[710px] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 2xl:grid-cols-[minmax(240px,1fr)_68px_72px_repeat(7,26px)] 2xl:gap-2 2xl:pr-0">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 font-medium">
-                          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm ${habitIconStyles[habitIndex % habitIconStyles.length]}`}>
+                          <span
+                            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm ${habitIconStyles[habitIndex % habitIconStyles.length]}`}
+                          >
                             {habitIcon}
                           </span>
                           <span className="truncate">{h.name}</span>
@@ -4201,7 +4321,9 @@ function Habits({
 
                       <span className="inline-flex shrink-0 whitespace-nowrap items-center justify-center gap-1 text-sm font-semibold text-slate-600 dark:text-slate-300">
                         {h.mins} min
-                        <span className="text-emerald-500" aria-label="minutes">♨</span>
+                        <span className="text-emerald-500" aria-label="minutes">
+                          ♨
+                        </span>
                       </span>
                       <span aria-hidden="true" className="hidden 2xl:block" />
                       {Array.from({ length: 7 }, (_, index) => {
@@ -4223,7 +4345,9 @@ function Habits({
                             onClick={() => toggleDone(h.id)}
                             className={dotClass}
                             aria-label={`${isDoneToday ? "Mark" : "Mark"} ${h.name} done today`}
-                            title={isDoneToday ? "Undo today" : "Mark done today"}
+                            title={
+                              isDoneToday ? "Undo today" : "Mark done today"
+                            }
                           />
                         ) : (
                           <span key={index} className={dotClass} />
@@ -4527,7 +4651,11 @@ function DailyGoal({
     Math.round((displayMinutes / (goal || 1)) * 100),
   );
   const viewLabel =
-    view === "today" ? "Today" : view === "yesterday" ? "Yesterday" : "Last 7 days";
+    view === "today"
+      ? "Today"
+      : view === "yesterday"
+        ? "Yesterday"
+        : "Last 7 days";
 
   const fmtMeta = (e) => {
     const time = e.at
@@ -4567,7 +4695,9 @@ function DailyGoal({
                   type="button"
                   onClick={(event) => {
                     setView(value);
-                    event.currentTarget.closest("details")?.removeAttribute("open");
+                    event.currentTarget
+                      .closest("details")
+                      ?.removeAttribute("open");
                   }}
                   className={`w-full rounded-lg px-2 py-1.5 text-left text-xs transition ${
                     view === value
@@ -4629,7 +4759,8 @@ function DailyGoal({
               <span className="inline-flex items-center gap-1">
                 Focus time
                 <HelpTip label="Focus time information" symbol="ⓘ">
-                  The total minutes from completed Pomodoro sessions in the selected period.
+                  The total minutes from completed Pomodoro sessions in the
+                  selected period.
                 </HelpTip>
               </span>
             </p>
@@ -4645,7 +4776,8 @@ function DailyGoal({
               <span className="inline-flex items-center gap-1">
                 Sessions
                 <HelpTip label="Sessions information" symbol="ⓘ">
-                  The number of completed Pomodoro sessions in the selected period.
+                  The number of completed Pomodoro sessions in the selected
+                  period.
                 </HelpTip>
               </span>
             </p>
@@ -4714,9 +4846,21 @@ function DailyGoal({
               const expanded = expandedSessionId === sessionId;
               const tag = inferTag(name);
               const sourceBadge = {
-                habit: { label: "Habit", icon: "♨", cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" },
-                task: { label: "Task", icon: "✓", cls: "bg-sky-500/15 text-sky-700 dark:text-sky-300" },
-                pomodoro: { label: "Focus", icon: "⏱", cls: "bg-violet-500/15 text-violet-700 dark:text-violet-300" },
+                habit: {
+                  label: "Habit",
+                  icon: "♨",
+                  cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+                },
+                task: {
+                  label: "Task",
+                  icon: "✓",
+                  cls: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
+                },
+                pomodoro: {
+                  label: "Focus",
+                  icon: "⏱",
+                  cls: "bg-violet-500/15 text-violet-700 dark:text-violet-300",
+                },
               }[e.sourceType || (name === "Pomodoro" ? "pomodoro" : "task")];
               return (
                 <div
@@ -4752,7 +4896,11 @@ function DailyGoal({
                             ? "whitespace-normal break-words"
                             : "truncate"
                         }`}
-                        title={expanded ? "Hide full task name" : "Show full task name"}
+                        title={
+                          expanded
+                            ? "Hide full task name"
+                            : "Show full task name"
+                        }
                         aria-expanded={expanded}
                       >
                         {name}
@@ -4778,58 +4926,58 @@ function DailyGoal({
         createPortal(
           <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/65 p-4 backdrop-blur-sm">
             <div className="flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-y-auto rounded-3xl border border-white/30 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900 sm:p-5">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-lg font-bold">Share your win</p>
-                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                  Your name and profile photo are included on the card.
-                </p>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-lg font-bold">Share your win</p>
+                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                    Your name and profile photo are included on the card.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShareOpen(false)}
+                  className={`h-9 w-9 shrink-0 rounded-xl border text-lg ${theme.secondaryButton}`}
+                  aria-label="Close sharing dialog"
+                >
+                  ×
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setShareOpen(false)}
-                className={`h-9 w-9 shrink-0 rounded-xl border text-lg ${theme.secondaryButton}`}
-                aria-label="Close sharing dialog"
-              >
-                ×
-              </button>
-            </div>
 
-            <div className="mt-4 flex min-h-64 items-center justify-center overflow-hidden rounded-2xl bg-slate-100 p-3 dark:bg-slate-800">
-              {sharePreviewLoading ? (
-                <span className="text-sm text-slate-500 dark:text-slate-400">
-                  Creating your card...
-                </span>
-              ) : sharePreviewUrl ? (
-                <img
-                  src={sharePreviewUrl}
-                  alt="FocusPlanner achievement card preview"
-                  className="max-h-[52vh] w-auto rounded-xl shadow-lg"
-                />
-              ) : (
-                <span className="text-sm text-slate-500 dark:text-slate-400">
-                  Card preview unavailable.
-                </span>
-              )}
-            </div>
+              <div className="mt-4 flex min-h-64 items-center justify-center overflow-hidden rounded-2xl bg-slate-100 p-3 dark:bg-slate-800">
+                {sharePreviewLoading ? (
+                  <span className="text-sm text-slate-500 dark:text-slate-400">
+                    Creating your card...
+                  </span>
+                ) : sharePreviewUrl ? (
+                  <img
+                    src={sharePreviewUrl}
+                    alt="FocusPlanner achievement card preview"
+                    className="max-h-[52vh] w-auto rounded-xl shadow-lg"
+                  />
+                ) : (
+                  <span className="text-sm text-slate-500 dark:text-slate-400">
+                    Card preview unavailable.
+                  </span>
+                )}
+              </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={downloadAchievementCard}
-                className={`rounded-xl border px-4 py-3 text-sm font-semibold ${theme.secondaryButton}`}
-              >
-                ⇩ Download PNG
-              </button>
-              <button
-                type="button"
-                onClick={shareAchievements}
-                className={`rounded-xl px-4 py-3 text-sm font-semibold ${theme.primaryButton}`}
-              >
-                ↗ Send to friends
-              </button>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={downloadAchievementCard}
+                  className={`rounded-xl border px-4 py-3 text-sm font-semibold ${theme.secondaryButton}`}
+                >
+                  ⇩ Download PNG
+                </button>
+                <button
+                  type="button"
+                  onClick={shareAchievements}
+                  className={`rounded-xl px-4 py-3 text-sm font-semibold ${theme.primaryButton}`}
+                >
+                  ↗ Send to friends
+                </button>
+              </div>
             </div>
-          </div>
           </div>,
           document.body,
         )}
@@ -4861,7 +5009,10 @@ function WeeklyInsights({ pomo, todos = [], habits = [] }) {
             key={label}
             className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-900/60"
           >
-            <span className="text-violet-600 dark:text-violet-300" aria-hidden="true">
+            <span
+              className="text-violet-600 dark:text-violet-300"
+              aria-hidden="true"
+            >
               {icon}
             </span>
             <p className="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">
@@ -4881,17 +5032,14 @@ function WeeklyChart({ pomo, todos = [], habits = [] }) {
     () => buildWeeklyActivity({ pomo, todos, habits }),
     [habits, pomo, todos],
   );
-  const maxMinutes = Math.max(
-    1,
-    ...data.map((day) => day.mins),
-  );
+  const maxMinutes = Math.max(1, ...data.map((day) => day.mins));
   const currentDay = todayKey();
 
   return (
     <div className="space-y-2">
       <h2 className="text-base font-semibold tracking-tight">This Week</h2>
       <div className="overflow-x-auto pb-1 custom-scroll">
-      <div className="grid grid-cols-7 divide-x divide-slate-200/80 sm:min-w-[560px] dark:divide-slate-700/80">
+        <div className="grid grid-cols-7 divide-x divide-slate-200/80 sm:min-w-[560px] dark:divide-slate-700/80">
           {data.map((day) => {
             const active = day.key === currentDay;
             const value = day.mins;
@@ -4924,18 +5072,22 @@ function WeeklyChart({ pomo, todos = [], habits = [] }) {
                 </div>
                 <span className="mt-1 text-[9px] leading-tight text-slate-400 sm:text-[11px] dark:text-slate-500">
                   {day.tasks > 0 && (
-                    <>{day.tasks} task{day.tasks === 1 ? "" : "s"}</>
+                    <>
+                      {day.tasks} task{day.tasks === 1 ? "" : "s"}
+                    </>
                   )}
                   {day.tasks > 0 && day.habits > 0 && " · "}
                   {day.habits > 0 && (
-                    <>{day.habits} habit{day.habits === 1 ? "" : "s"}</>
+                    <>
+                      {day.habits} habit{day.habits === 1 ? "" : "s"}
+                    </>
                   )}
                   {day.tasks === 0 && day.habits === 0 && "0 items"}
                 </span>
               </div>
             );
           })}
-      </div>
+        </div>
       </div>
     </div>
   );
@@ -4960,7 +5112,8 @@ function WeeklyOverview({ pomo, todos, onViewStatistics }) {
   const completedTasks = useMemo(
     () =>
       (todos ?? []).filter(
-        (todo) => todo.done && (todo.doneAt || todo.createdAt || 0) >= weekStart,
+        (todo) =>
+          todo.done && (todo.doneAt || todo.createdAt || 0) >= weekStart,
       ).length,
     [todos, weekStart],
   );
@@ -4970,16 +5123,24 @@ function WeeklyOverview({ pomo, todos, onViewStatistics }) {
       <h2 className="text-lg font-semibold tracking-tight">Overview</h2>
       <div className="mt-4 space-y-4">
         <div className="flex items-start gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-600 dark:bg-violet-950/60 dark:text-violet-300">◷</span>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-600 dark:bg-violet-950/60 dark:text-violet-300">
+            ◷
+          </span>
           <div>
-            <p className="text-sm text-slate-500 dark:text-slate-400">Total focus time</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Total focus time
+            </p>
             <p className="text-xl font-bold">{focusMinutes} min</p>
           </div>
         </div>
         <div className="flex items-start gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-600 dark:bg-violet-950/60 dark:text-violet-300">☑</span>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-600 dark:bg-violet-950/60 dark:text-violet-300">
+            ☑
+          </span>
           <div>
-            <p className="text-sm text-slate-500 dark:text-slate-400">Tasks completed</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Tasks completed
+            </p>
             <p className="text-xl font-bold">{completedTasks}</p>
           </div>
         </div>
