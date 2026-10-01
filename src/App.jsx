@@ -1537,19 +1537,18 @@ export default function FocusFlow() {
       }
     };
 
-    // One-time UX tip if notifications are not enabled/unsupported
+    // Explain a blocked permission without confusing it with an HTTPS problem.
     const WARN_KEY = "ff.notifWarned";
-    const notifGranted = canNotify() && Notification.permission === "granted";
     if (
       !isNativeApp() &&
-      (!secureOk() || !notifGranted) &&
+      canNotify() &&
+      secureOk() &&
+      Notification.permission === "denied" &&
       localStorage.getItem(WARN_KEY) !== "1"
     ) {
       localStorage.setItem(WARN_KEY, "1");
       toast.error(
-        canNotify()
-          ? "Enable notifications (HTTPS or localhost) — click 'Enable notifications' above."
-          : "This browser doesn't support Web Notifications.",
+        "Notifications are blocked. Enable them in your browser settings to receive reminders.",
       );
     }
 
